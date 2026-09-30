@@ -1,0 +1,14 @@
+/artifacts/
+/build/
+/test_mux.mp4
+**/__pycache__/
+*.pyc
+/tools/*.exe
+/tools/_internal/
+/tools/*.log
+/tools/*.csv
+/dist/
+/release/
+/release-work/
+/settings.json
+/third_party/OpenXR-SDK-Source/
