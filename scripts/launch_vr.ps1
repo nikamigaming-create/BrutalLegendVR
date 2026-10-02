@@ -38,10 +38,11 @@ if (-not (Test-Path -LiteralPath $hostExe)) { throw 'BLVR host is missing. Extra
 & $hostExe --check-controls
 if ($LASTEXITCODE -ne 0) { throw 'Invalid controls.ini. Open Remap Controls.cmd and restore a working layout.' }
 $rig=Join-Path $projectRoot 'artifacts\eddie-rig\eddie.rigcache'
+foreach ($file in @((Join-Path $projectRoot 'assets\room\iron-medallion.png'),(Join-Path $projectRoot 'assets\room\basalt.png'))) {
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Release artwork missing: $file. Extract the complete release ZIP." }
+}
 if ($CheckOnly) {
-    foreach ($file in @($rig,(Join-Path $projectRoot 'assets\room\iron-medallion.png'),(Join-Path $projectRoot 'assets\room\basalt.png'))) {
-        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required file missing: $file. Run Setup VR.cmd first." }
-    }
+    if (-not (Test-Path -LiteralPath $rig -PathType Leaf)) { throw "Owned model missing: $rig. Run Setup VR.cmd first." }
     $hook=Join-Path $projectRoot 'bin\d3d9.dll'
     if (-not (Test-Path -LiteralPath $hook)) { $hook=Join-Path $projectRoot 'build\Release\d3d9.dll' }
     if (-not (Test-Path -LiteralPath $hook)) { throw 'VR hook is missing.' }
@@ -71,6 +72,10 @@ for ($i=0; $i -lt 1200; $i++) {
         $content=Get-Content -LiteralPath $logFile -Raw -ErrorAction SilentlyContinue
         if ($content.Length -lt $logOffset) { $logOffset=0 }
         $new=if ($content.Length -gt $logOffset) { $content.Substring($logOffset) } else { '' }
+        if ($new -match 'EddieLobby: unavailable') {
+            Stop-Process -Id $hostProcess.Id -ErrorAction SilentlyContinue
+            throw "VR rig could not load. Open Setup VR.cmd to prepare your model and check $logFile."
+        }
         if ($new -match 'PoseBridge: READY') { $ready=$true; break }
     }
 }

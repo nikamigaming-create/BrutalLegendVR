@@ -5,6 +5,7 @@ from PIL import Image
 from blvr_bot import Bot
 from blvr_solo_bot import rig,fingertip_reference,native_solo,GUITAR_GRIP,PICKING_GRIP
 import run_blvr_elliott_proof as sim
+from rig_bridge import RIG_SKIN_OFFSET, RIG_WEAPON_OFFSET
 
 
 def capture_ui(bot,label):
@@ -35,9 +36,9 @@ def play(bot):
     time.sleep(.5)
     index,reference=fingertip_reference();grip=np.array([.7,.15,-.5])
     def current():
-        frame,data=rig()
-        guitar=np.array(struct.unpack_from('<16f',data,48+16384+64)).reshape(4,4)
-        tip=reference@np.array(struct.unpack_from('<16f',data,48+index*64)).reshape(4,4)
+        frame,data=rig(bot)
+        guitar=np.array(struct.unpack_from('<16f',data,RIG_WEAPON_OFFSET+64)).reshape(4,4)
+        tip=reference@np.array(struct.unpack_from('<16f',data,RIG_SKIN_OFFSET+index*64)).reshape(4,4)
         return guitar,tip
     for depth in (.32,.06):
         for i in range(18):

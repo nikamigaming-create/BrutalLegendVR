@@ -11,7 +11,7 @@ namespace blvr_ui_bridge {
 constexpr wchar_t MappingName[] = L"Local\\BLVR_NativeUi_v2";
 constexpr uint32_t Magic = 0x49554c42u;
 constexpr uint32_t Version = 2u;
-enum ContentFlags : uint32_t { SoloRadial = 1u, SoloNotes = 2u };
+enum ContentFlags : uint32_t { SoloRadial = 1u, SoloNotes = 2u, BuildRadial = 4u };
 constexpr uint32_t MaxWidth = 1280u;
 constexpr uint32_t MaxHeight = 720u;
 constexpr size_t PixelBytes = size_t(MaxWidth) * MaxHeight * 4u;

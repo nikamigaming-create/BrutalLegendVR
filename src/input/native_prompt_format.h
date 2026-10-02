@@ -10,7 +10,7 @@ namespace BLVR {
 // setter so buffer ownership, length and capacity stay with the game.
 using NativePromptAssign = void*(__thiscall*)(void*,const char*);
 inline bool RemapNativePrompt(void** text,NativePromptAssign assign,
-                              std::string* rendered=nullptr) {
+                              std::string* rendered=nullptr,bool buildContext=false) {
     if(!text||!*text||!assign)return false;
     const wchar_t* source=*static_cast<const wchar_t* const*>(*text);
     if(!source||!std::wcschr(source,L'/'))return false;
@@ -21,7 +21,7 @@ inline bool RemapNativePrompt(void** text,NativePromptAssign assign,
     if(!WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,source,-1,
                            utf8.data(),bytes,nullptr,nullptr))return false;
     utf8.pop_back();
-    std::string replaced=VrPromptText(utf8);
+    std::string replaced=VrPromptText(utf8,ActiveBindings(),buildContext);
     if(replaced==utf8)return false;
     assign(*text,replaced.c_str());
     if(rendered)*rendered=std::move(replaced);

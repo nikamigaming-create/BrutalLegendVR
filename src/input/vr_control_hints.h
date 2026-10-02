@@ -8,10 +8,23 @@ inline std::string PromptActionLabel(NativeAction action,const ControlBindings& 
     const auto& binding=bindings.actions[action];
     return (binding.command?CommandChordLabel(bindings)+" + ":std::string{})+TouchLabel(binding.input);
 }
+inline std::string BuildModalActionLabel(NativeAction action,TouchInput alternate,const ControlBindings& bindings) {
+    const auto& binding=bindings.actions[action];
+    const auto& build=bindings.actions[BuildMenu];
+    std::string label;
+    if(binding.input!=TI::None&&!BuildInputHeldByChord(binding.input,bindings)&&(!binding.command||build.command))
+        label=TouchLabel(binding.input);
+    if(alternate!=TI::None&&!BuildInputHeldByChord(alternate,bindings)&&alternate!=binding.input) {
+        if(!label.empty())label+=" or ";
+        label+=TouchLabel(alternate);
+    } else if(label.empty()&&alternate!=TI::None&&!BuildInputHeldByChord(alternate,bindings))label=TouchLabel(alternate);
+    return label.empty()?TouchLabel(TI::None):label;
+}
 namespace VrHintDetail {
 inline bool ReadWeapon(const std::string& text,size_t at,NativeAction& action,size_t& end) {
     const std::pair<const char*,NativeAction> tokens[]{
-        {"/AxeAttack/",Axe},{"/GuitarAttack/",Guitar},{"/South/",Axe},{"/West/",Guitar}
+        {"/AxeAttack/",Axe},{"/GuitarAttack/",Guitar},{"/South/",Axe},{"/West/",Guitar},
+        {"/kBI_PrimaryMeleeAttack/",Axe},{"/kBI_SecondaryMeleeAttack/",Guitar}
     };
     for(const auto& token:tokens) {
         const size_t length=std::char_traits<char>::length(token.first);
@@ -57,15 +70,66 @@ inline void WeaponSequences(std::string& text,const ControlBindings& bindings) {
     }
 }
 }
-inline std::string VrPromptText(std::string text,const ControlBindings& bindings=ActiveBindings()) {
+inline std::string VrPromptText(std::string text,const ControlBindings& bindings=ActiveBindings(),
+                                bool buildContext=false) {
     if(text.find('/')==std::string::npos)return text;
+    // Owned TOSK097 localizes as Accept; the live Flash formatter receives
+    // RadialAccept. The wheel reuses this caption for units and stage tiers,
+    // both action25. Name both purposes only in these exact full templates.
+    // Use16 remains a separate research input.
+    if(buildContext&&(text=="/Accept/ TO RECRUIT"||text=="/RadialAccept/ TO RECRUIT"))
+        text+=" / UPGRADE";
     const auto replace=[&](const std::string& from,const std::string& to) {
         size_t at=0;while((at=text.find(from,at))!=std::string::npos) {text.replace(at,from.size(),to);at+=to.size();}
     };
+    // Owned TETL003 already names the movement input after Dodge. Its exact
+    // combo needs one stick label before the standalone Dodge alias expands.
+    replace("/Dodge/ and /MovementControls/",PromptActionLabel(Evade,bindings)+
+        " + "+StickLabel(bindings.movementStick));
     const std::string axe=TouchLabel(bindings.equipAxe),guitar=TouchLabel(bindings.equipGuitar);
+    if(buildContext) {
+        const std::string recruit=BuildModalActionLabel(RadialAccept,bindings.soloAcceptAlternate,bindings);
+        const std::string research=BuildModalActionLabel(Use,bindings.buildResearchAlternate,bindings);
+        const std::string cancel=BuildModalActionLabel(CancelBuildItem,TI::None,bindings);
+        // Native TOSK097/TOSK098 use Accept for recruitment/stage upgrade.
+        // Keep that confirmation separate from the native Use research path.
+        for(const auto* alias:{"/kBI_RadialAccept/","/RadialAccept/","/kBI_Accept/","/Accept/","/South/"})replace(alias,recruit);
+        for(const auto* alias:{"/kBI_Use/","/Use/","/Interact/","/Activate/","/Coop/","/North/"})replace(alias,research);
+        for(const auto* alias:{"/kBI_CancelBuildItem/","/CancelBuildItem/"})replace(alias,cancel);
+        for(const auto* alias:{"/LeftStick/","/BUTTON_StickLeft/"})replace(alias,StickLabel(bindings.radialStick));
+    }
+    // FrontEnd's native HintBar uses enum spellings rather than the friendly
+    // gameplay aliases below. Map the logical action before the retail
+    // formatter chooses its keyboard/gamepad glyph; never substitute a
+    // physical Xbox letter for a differently configured VR input.
+    const std::pair<const char*,NativeAction> nativeButtons[]{
+        {"UI_A",UiA},{"UI_B",UiB},{"UI_X",UiX},{"UI_Y",UiY},{"UI_Start",UiStart},{"UI_Back",UiBack},
+        {"UI_DPadUp",UiUp},{"UI_DPadDown",UiDown},{"UI_DPadLeft",UiLeft},{"UI_DPadRight",UiRight},
+        {"UI_TriggerLeft",UiTriggerLeft},{"UI_TriggerRight",UiTriggerRight},
+        {"UI_ShoulderLeft",UiShoulderLeft},{"UI_ShoulderRight",UiShoulderRight},
+        {"Accept",Accept},{"Cancel",Cancel},{"Use",Use},{"Map",Map},{"Journal",Journal},
+        {"PrimaryMeleeAttack",Axe},{"SecondaryMeleeAttack",Guitar},{"Evade",Evade},{"Block",Block},
+        {"ZTarget",Target},{"RockStance",RockStance},{"RadialAccept",RadialAccept},
+        {"SoloNote1",SoloNote1},{"SoloNote2",SoloNote2},{"SoloNote3",SoloNote3},
+        {"Beacon",Beacon},{"OrderCharge",OrderCharge},{"OrderDefend",OrderDefend},{"OrderMove",OrderMove},
+        {"OrderFollow",OrderFollow},{"BuildMenu",BuildMenu},{"CancelBuildItem",CancelBuildItem},
+        {"Fly",Fly},{"Descend",Descend},{"Ascend",Ascend},{"Handbrake",Handbrake},{"Boost",Boost},
+        {"AlternateCam",AlternateCam},{"PrimaryVehicleAttack",PrimaryVehicleAttack},
+        {"SecondaryVehicleAttack",SecondaryVehicleAttack},{"LeftCoopAttack",LeftCoopAttack},
+        {"RightCoopAttack",RightCoopAttack},{"PlaylistUI",PlaylistUI},{"PlaylistToggle",PlaylistToggle},
+        {"PlaylistNext",PlaylistNext},{"PlaylistPrev",PlaylistPrev},{"PlaylistRewind",PlaylistRewind}
+    };
+    static_assert(sizeof(nativeButtons)/sizeof(nativeButtons[0])==NativeActionCount);
+    replace("/kSI_Move/",StickLabel(bindings.movementStick));
+    replace("/kSI_Look/",std::string("head movement and ")+StickLabel(bindings.turnStick)+" snap turn");
+    replace("/kSI_SwitchTarget/",std::string(StickLabel(bindings.radialStick))+" while targeting");
+    replace("/kSI_RadialMenu/",StickLabel(bindings.radialStick));
+    replace("/kAI_Gas/",PromptActionLabel(PrimaryVehicleAttack,bindings));
+    replace("/kAI_Brake/",PromptActionLabel(SecondaryVehicleAttack,bindings));
     // Handle whole combos before their component aliases. Both weapons use
     // the trigger, so replacing each icon alone loses the required selection.
     VrHintDetail::WeaponSequences(text,bindings);
+    for(const auto& alias:nativeButtons)replace(std::string("/kBI_")+alias.first+"/",PromptActionLabel(alias.second,bindings));
     replace("Hold /RockStance/ and select ","Press "+PromptActionLabel(RockStance,bindings)+" and select ");
     replace("Hold /SummonGuitar/ to play guitar.","Press "+guitar+
         " to equip the guitar; strum with your right hand or use "+PromptActionLabel(Guitar,bindings)+".");
@@ -107,13 +171,16 @@ inline std::string VrPromptText(std::string text,const ControlBindings& bindings
     replace("/West/",PromptActionLabel(CancelBuildItem,bindings));
     replace("/SummonGuitar/",guitar);
     replace("/Dodge/",PromptActionLabel(Evade,bindings)+" + "+StickLabel(bindings.movementStick));
-    replace("/Steer/",std::string(TouchLabel(bindings.wheelGrip))+" + hand turn, or left stick");
-    replace("/DrivingControls/",std::string(TouchLabel(bindings.wheelGrip))+" + hand turn, or left stick");
+    const std::string steering=std::string(TouchLabel(bindings.wheelGrip))+" + hand turn, or "+StickLabel(bindings.movementStick);
+    replace("/Steer/",steering);
+    replace("/DrivingControls/",steering);
     for(unsigned n=0;n<3;++n)replace("/SoloNote"+std::to_string(n+1)+"/",
         "right-hand strum (or "+PromptActionLabel(static_cast<NativeAction>(SoloNote1+n),bindings)+")");
+    replace("/MovementControls/",StickLabel(bindings.movementStick));
+    replace("/CameraControls/",std::string("head movement and ")+StickLabel(bindings.turnStick)+" snap turn");
+    replace("/RadialSelect/",StickLabel(bindings.radialStick));
+    replace("/TargetSwitch/",std::string(StickLabel(bindings.radialStick))+" while targeting");
     const std::pair<const char*,const char*> fixed[]{
-        {"MovementControls","left stick"},{"CameraControls","head movement and right-stick snap turn"},
-        {"RadialSelect","right stick"},{"TargetSwitch","right stick while targeting"},
         {"LeftStick","left stick"},{"RightStick","right stick"},
         {"BUTTON_StickLeft","left stick"},{"BUTTON_StickRight","right stick"}
     };

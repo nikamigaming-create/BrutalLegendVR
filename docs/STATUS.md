@@ -1,6 +1,79 @@
 # Brütal Legend VR (BLVR) — Project Status
 
-## Current build: September 29, 2026
+## Current work: October 2, 2026
+
+**[0.1.0-preview.2](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.2) is an experimental testing release.** It improves the remapping editor,
+tracking-loss behavior, exact stereo UI attachment and binocular collection
+depth. All 51 native actions plus 20 VR controls remain remappable during
+play, with Earthshaker on both grips by default. Tracking loss keeps equipment
+selection and uses the current native arm pose; generated attack/UI pulses
+release. Gameplay panels require matching rendered geometry in both eyes.
+An unreachable support-hand solve restores the unconstrained hand and weapon.
+
+Six controls-editor tests pass, including hidden Tk row-switching/search
+events, all 71 descriptions, parser compatibility and atomic-save failure
+handling. Focused native controls/input and real retail Flash formatter checks
+pass, including live remapping. A fresh simulator capture confirms the native
+menu shows X Watch Tutorial, A Select and B Back. Native AI Practice has reached
+a stage battle, tracked flight and native Headbanger purchase and spawning
+through the held build wheel. Right-trigger confirmation queued a stage upgrade,
+and the latest native readback confirmed Stage 2 and Stage 3 progression
+(native levels 1 and 2).
+X cancellation refunds the queued unit's cost. The new
+left-trigger research alternate preserves ordinary Use/interact on A. A native
+Headbanger research purchase, with an authored cost of 200 fans, advanced the
+purchased-upgrade count from 19 to 20 with the exact research key. The isolated
+fan debit and expected MaxHealth change
+from 250 to 375 has not been proved.
+RTS7 matched all four native order timers to the input sequence and observed
+the same squad move; complete order behavior remains unverified. RTS15 confirmed
+the shared **right trigger TO RECRUIT / UPGRADE** caption in both simulator eyes;
+both purposes use the same confirmation input. The final native formatter suite
+passes 25 cases with 23 remaps. RTS coverage is local Ironheade AI Practice; other factions,
+online play and co-op remain unverified.
+The remapping audit also aligns host pause, solo-menu and note/attack animation
+reads with native command scopes, and guards native vehicle analog and physical
+strum fallback reads. The paired native/host build, focused controls/input and
+formatter suites, stopped host self-test and owned-rig visual fixtures pass,
+including those scope cases. They do not establish new live gameplay acceptance.
+The current opening-menu retake confirms left-stick horizontal changes the
+native carousel; right-stick horizontal turns the room. Multiplayer, the
+stage tutorial, AI Practice and lobby Start were reached through native pages.
+Exact rendered guitar-fingertip contact entered native note mode. The simulator
+completed one native timed solo in slot 10 using its authored Y/X/A sequence
+and reported success. Physical solo strokes remain unproved in the current
+retake.
+A same-frame SBS final-compositor take of the real Walker descent retained
+visible geometry through yaw ±35°, pitch ±30° and 15 cm forward lean. A separate
+stationary-platform check kept the flame visuals attached through lean ±12 cm,
+yaw ±20° and pitch +15°. These are bounded simulator results: light pools,
+shadows, height dependence and physical headset behavior remain unverified.
+Native emitter attachment to tracked weapons remains unresolved; the experimental
+weapon-ribbon root correction remains off by default and has not passed visual
+acceptance. Physical readability, complete RTS stage battles and
+the full campaign remain unverified. Those Walker/flame checks used host SHA-256
+prefix `a41ea8c6` and hook prefix `fff4f493`.
+The released host/hook (`3d6db8cc` / `72d34487`) passes the host/native fixtures
+and owned-rig fixtures. Its popup offset frames the complete native pause row
+in both eyes at a neutral palm pose. Labels are small at 640 pixels per eye.
+The fresh 10.5-second, 315-frame stereo motion take keeps the complete row in
+both eyes. It used the same host and the hook before a telemetry-flush-only
+change (`f61bdf71`). The earlier motion clip began after the native 450-frame
+idle hide. A native button or stick input wakes it; head or palm motion alone
+does not. Physical readability remains unverified.
+The native direction fixture also passes full/partial stick presses, native
+hold/repeat timing and runtime button/chord remaps. The guarded correction
+removes duplicated arrow-menu steps while preserving opening carousel input
+and native gameplay history. A fresh native pause retake confirmed one right-stick press advances one menu item.
+Diagnostic telemetry and performance recording are opt-in and capped at
+32 MiB per telemetry/profiler file. The input diagnostic log shares the telemetry
+opt-in, resets per launch and stops at 32 MiB. Recording requires explicit opt-in even
+in the simulator. Private proof clips remain short and subject to the 500 MiB
+total cap.
+The bundled standalone Setup passed a fresh local owned-model import with no
+animation recordings. See [the release notes](RELEASE_0.1.0-preview.2.md).
+
+## Published baseline: September 29, 2026
 
 Public preview [0.1.0-preview.1](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.1) includes both-grip Earthshaker,
 all-action live remapping and same-frame native animation retargeting. Setup
@@ -90,7 +163,7 @@ render tests; their physical feel has not yet been accepted.
 
 Tracked Eddie is now available in the opening 3D menu and the native gameplay
 render packets. The rig uses the owned 212-bone skeleton, native meshes and
-retail-evaluated animation clips, with connected arm IK, corrected palm axes,
+native live animation poses, with connected arm IK, corrected palm axes,
 forearm axial twist and fitted weapon grips. X/Y select axe/guitar; right trigger
 or a physical swing/strum feeds the existing retail action. Optional support-hand
 grip works for both weapons. Walk up to the opening panel and touch Confirm,

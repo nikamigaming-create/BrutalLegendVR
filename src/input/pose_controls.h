@@ -15,6 +15,7 @@ inline TouchControls TouchFromPose(const blvr_xr_bridge::PoseBridge& frame) {
     t.leftClick=(l.buttons&ControllerThumbstickPressed)!=0;t.rightClick=(r.buttons&ControllerThumbstickPressed)!=0;
     t.menu=((l.buttons|r.buttons)&ControllerMenuClick)!=0;
     t.hostRadial=(r.activeFlags&HostRadialMetadata)!=0;t.hostAccept=(r.activeFlags&HostAcceptMetadata)!=0;
+    t.buildRadial=(r.activeFlags&BuildRadialMetadata)!=0;
     return t;
 }
 inline uint32_t PackRadialAxes(float x,float y) {

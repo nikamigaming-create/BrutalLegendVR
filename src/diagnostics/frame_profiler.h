@@ -18,7 +18,7 @@ inline const char* Names[] = {"stereo_ms","rig_ms","left_render_ms","right_rende
     "xr_wait_ms","xr_input_ms","bridge_ms","upload_ms","host_render_ms","xr_end_ms","terrain_build_ms","terrain_prune_ms"};
 inline int64_t now() { LARGE_INTEGER value{}; QueryPerformanceCounter(&value); return value.QuadPart; }
 struct Recorder {
-    bool enabled=true;
+    bool enabled=false;
     double ticksPerMs=1;
     std::array<std::atomic<int64_t>,Count> values{};
     FILE* file=nullptr;
@@ -28,7 +28,7 @@ struct Recorder {
     unsigned rows=0;
     Recorder() {
         char option[8]{}; GetEnvironmentVariableA("BLVR_PERF",option,sizeof(option));
-        enabled=option[0]!='0';
+        enabled=option[0]=='1'||_stricmp(option,"true")==0;
         LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
         ticksPerMs=double(frequency.QuadPart)/1000.0;
     }
@@ -53,6 +53,10 @@ struct Recorder {
                 for(const char* name:Names) std::fprintf(file,",%s",name);
                 std::fputc('\n',file);
             }
+        }
+        // Explicit profiling still has a fixed disk budget per process.
+        if(file&&_ftelli64(file)>=32ll*1024*1024-4096) {
+            std::fflush(file);enabled=false;return;
         }
         if(file&&previous) {
             std::fprintf(file,"%.6f,%llu,%llu,%u,%u,%.4f,%.4f",double(end)/ticksPerMs/1000.0,

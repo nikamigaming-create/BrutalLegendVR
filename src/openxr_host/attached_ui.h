@@ -10,7 +10,18 @@ struct AttachedUiPanel {
     UiMount mount = AbovePalm;
     XrVector4f uv{0,0,1,1};
     float width = .66f, height = .37125f;
+    XrVector3f localOffset{};
 };
+
+inline XrVector3f rotateUiVector(const XrQuaternionf& q,const XrVector3f& v) {
+    const XrVector3f t{2*(q.y*v.z-q.z*v.y),2*(q.z*v.x-q.x*v.z),2*(q.x*v.y-q.y*v.x)};
+    return {v.x+q.w*t.x+q.y*t.z-q.z*t.y,v.y+q.w*t.y+q.z*t.x-q.x*t.z,v.z+q.w*t.z+q.x*t.y-q.y*t.x};
+}
+inline XrPosef attachedUiPanelPose(const AttachedUiPanel& panel,const XrPosef& mount) {
+    auto pose=mount;const auto offset=rotateUiVector(mount.orientation,panel.localOffset);
+    pose.position.x+=offset.x;pose.position.y+=offset.y;pose.position.z+=offset.z;
+    return pose;
+}
 
 // Every gameplay pixel goes to an anatomical/weapon attachment. There is no
 // head-locked or face-centered fallback. Transparent margins are cropped using
@@ -38,7 +49,11 @@ inline std::vector<AttachedUiPanel> layoutAttachedUi(const uint8_t* bgra,
         panel.uv={float(x0)/width,float(y0)/height,float(x1)/width,float(y1)/height};
         output.push_back(panel);
     };
-    if(flags&(blvr_ui_bridge::SoloRadial|blvr_ui_bridge::SoloNotes)) {
+    if(flags&blvr_ui_bridge::BuildRadial) {
+        // Stage recruitment is a native command menu, separate from solos.
+        // Keep its complete queue and selected-unit text on the palm panel.
+        append(AbovePalm,0,width,.70f);
+    } else if(flags&(blvr_ui_bridge::SoloRadial|blvr_ui_bridge::SoloNotes)) {
         append(GuitarHeadstock,0,width,.52f);
         if((flags&blvr_ui_bridge::SoloRadial)&&!output.empty()) {
             // The native direction needle extends outside its dial. Give the
@@ -62,7 +77,15 @@ inline std::vector<AttachedUiPanel> layoutAttachedUi(const uint8_t* bgra,
         // Native pause/tutorial cards occupy the central display. Sparse
         // gameplay HUDs are split into forearm stats and palm notifications.
         const bool popup=center>width*height/16/512;
-        if(popup) append(AbovePalm,0,width,.70f);
+        if(popup) {
+            append(AbovePalm,0,width,.70f);
+            // A complete native menu is wider than a wrist status display.
+            // Give it room above the left palm: screen-right shifts inward,
+            // and negative screen-normal moves it farther from the viewer.
+            // The offset follows the exact rendered mount in each eye; it is
+            // neither fitted independently per eye nor locked to the head.
+            if(!output.empty())output.back().localOffset={.20f,0,-.30f};
+        }
         else {
             append(LeftForearm,0,width/4,.30f);
             append(AbovePalm,width/4,width*3/4,.60f);

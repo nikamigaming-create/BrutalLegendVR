@@ -19,6 +19,7 @@ import time
 
 from PIL import Image
 import run_blvr_elliott_proof as sim
+from rig_bridge import read_current_rig
 
 RECEIPT = sim.ARTIFACTS / 'current-stereo-diagnostic.json'
 EXE_HASH = '872dc676e8fd77ad3351dd9dfcc99e89353aae0ed9857272a65fd47f298fb0b1'
@@ -177,24 +178,22 @@ class NativeWorld:
     def damage(self,actor):
         # CoDamageable's inherited RTTI key is present for derived components.
         # Retail Invulnerable getter RVA 2408B0 reads the nesting count at +48;
-        # CurrentHealth's registered float field is +2C. These are observations.
+        # The named MaxHealth getter RVA 3BB4C0 reads +2C. The max-health
+        # setter RVA 450160 and heal consumer RVA 3BB4D0 use +30 for current
+        # health, preserving/capping it against +2C. Do not infer this field
+        # from the misleading raw CurrentHealth registration descriptor.
         count=self.u32(actor+0x3c)>>6;entries=self.u32(actor+0x44)
         if not entries or count>256:return None
         for key,component in struct.iter_unpack('<2I',self.read(entries,count*8)):
             if key==self.base+0xc29770 and component and self.u32(component+0x10)==actor:
                 return dict(invulnerable=struct.unpack('<i',self.read(component+0x48,4))[0]>0,
-                            health=struct.unpack('<f',self.read(component+0x2c,4))[0])
+                            health=struct.unpack('<f',self.read(component+0x30,4))[0],
+                            max_health=struct.unpack('<f',self.read(component+0x2c,4))[0])
         return None
 
     def weapon(self):
-        size=48+256*64+128;latest=(0,0)
-        with mmap.mmap(-1,size*64,tagname=r'Local\BLVR_TrackedEddie_v1',access=mmap.ACCESS_READ) as view:
-            for slot in range(64):
-                offset=slot*size;header=view[offset:offset+48]
-                sequence,magic,epoch,frame,timestamp,signature,bones,weapon=struct.unpack('<IIQQqQII',header)
-                if sequence and not sequence&1 and magic==0x47495242 and struct.unpack_from('<I',view,offset)[0]==sequence:
-                    if timestamp>latest[0]:latest=(timestamp,weapon)
-        return latest[1]
+        self.live()
+        return read_current_rig(expected_pid=self.receipt.get('host_pid'))['weapon']
 
     def vehicle(self):
         """Current native mount and its heading; independent of headset/camera."""

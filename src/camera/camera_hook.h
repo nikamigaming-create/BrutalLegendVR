@@ -2,6 +2,8 @@
 #include <cstdint>
 
 namespace BLVR {
+bool CameraHook_IsBuildUiOpen();
+bool CameraHook_IsBuildStageUpgradeSelected();
 
 bool CameraHook_Init();
 void CameraHook_Shutdown();

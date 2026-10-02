@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cmath>
+#include <limits>
 
 namespace BLVR {
 namespace {
@@ -20,7 +21,8 @@ struct Binding {
     unsigned count = 0;
     int head = -1, neck = -1, leftEye = -1, rightEye = -1;
     bool hidden[MaxBones]{};
-    bool retailOnly[MaxBones]{};
+    bool wing[MaxBones]{};
+    int wingRootParent[MaxBones]{};
     bool arm[MaxBones]{};
     bool leftArm[MaxBones]{};
     bool leg[MaxBones]{};
@@ -41,6 +43,11 @@ float* weaponWorld[2]{};
 float savedWeaponWorld[2][16]{};
 float* editedWeaponWorld[2]{};
 unsigned activeSelectedWeapon=0;
+unsigned activeTrackedHands=0;
+void* editedScene=nullptr;
+uint32_t weaponHandles[2]{0xffffffffu,0xffffffffu};
+uint64_t activeRigPose=0,activeRigEpoch=0;
+int64_t activeRigDisplayTime=0;
 
 template<class T> T Read(const void* object, unsigned offset) {
     return *reinterpret_cast<const T*>(static_cast<const uint8_t*>(object) + offset);
@@ -58,7 +65,6 @@ bool Bind(const uint8_t* resource) {
     for (unsigned i=0; i<count; ++i) {
         const char* name = names + (identifiers[i*2] & 0xffff);
         binding.signature=blvr_xr_bridge::RigNameHash(binding.signature,name);
-        binding.retailOnly[i]=std::strstr(name,"Wing")!=nullptr||std::strstr(name,"wing")!=nullptr;
         if (std::strcmp(name,"Head")==0) binding.head=i;
         if (std::strcmp(name,"Neck1")==0) binding.neck=i;
         if (std::strcmp(name,"Lf_Eye")==0) binding.leftEye=i;
@@ -78,6 +84,9 @@ bool Bind(const uint8_t* resource) {
         const int parent = parents[i];
         if (parent < -1 || parent >= static_cast<int>(i)) return false;
         binding.parent[i]=parent;
+        binding.wing[i]=std::strcmp(name,"Wings")==0||(parent>=0&&binding.wing[parent]);
+        binding.wingRootParent[i]=binding.wing[i]?
+            (parent>=0&&binding.wing[parent]?binding.wingRootParent[parent]:parent):-1;
         binding.arm[i]=std::strcmp(name,"Lf_Shoulder")==0||std::strcmp(name,"Rt_Shoulder")==0||
             (parent>=0&&binding.arm[parent]);
         binding.leftArm[i]=std::strcmp(name,"Lf_Shoulder")==0||(parent>=0&&binding.leftArm[parent]);
@@ -131,6 +140,19 @@ uint8_t* FindSnapshot(uint8_t* scene,const void* renderOwner,uintptr_t base) {
 using namespace DirectX;
 XMMATRIX Load(const float* m) {return XMLoadFloat4x4(reinterpret_cast<const XMFLOAT4X4*>(m));}
 void Store(float* m,FXMMATRIX value) {XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(m),value);}
+bool FiniteMatrix(const float* m,float bound=100) {
+    for(int i=0;i<16;++i)if(!std::isfinite(m[i])||std::fabs(m[i])>bound)return false;
+    return true;
+}
+bool AffineMatrix(const float* m,float bound=100) {
+    return FiniteMatrix(m,bound)&&std::fabs(m[3])<.00001f&&std::fabs(m[7])<.00001f&&
+        std::fabs(m[11])<.00001f&&std::fabs(m[15]-1)<.00001f;
+}
+bool UsableMatrix(const float* m,float bound=100) {
+    if(!AffineMatrix(m,bound))return false;
+    const float determinant=XMVectorGetX(XMMatrixDeterminant(Load(m)));
+    return std::isfinite(determinant)&&std::fabs(determinant)>.00000001f;
+}
 bool Descendant(unsigned joint,int ancestor) {
     if(ancestor<0)return false;
     for(int i=static_cast<int>(joint);i>=0;i=binding.parent[i])if(i==ancestor)return true;
@@ -199,7 +221,7 @@ void SolveLiveArm(float model[MaxBones][16],int hand,FXMMATRIX requested) {
         }
     }
 }
-void RetargetLive(const blvr_xr_bridge::RigFrame& rig,const float headToBody[16],const float headWorld[16],
+bool RetargetLive(const blvr_xr_bridge::RigFrame& rig,const float headToBody[16],
                   const float world[16],float skins[MaxBones][16],float weapons[2][16]) {
     float native[MaxBones][16]{},tracked[MaxBones][16]{},model[MaxBones][16]{};
     for(unsigned i=0;i<editedCount;++i) {
@@ -209,26 +231,43 @@ void RetargetLive(const blvr_xr_bridge::RigFrame& rig,const float headToBody[16]
         Store(tracked[i],Load(binding.reference[i])*Load(skins[i]));
     }
     std::memcpy(model,tracked,sizeof(model));
-    // Native locomotion, evaluated this frame, under the stable tracked torso.
-    for(unsigned i=0;i<editedCount;++i)if(binding.leg[i]&&binding.parent[i]>=0) {
+    // Re-express this frame's native legs and any unavailable arm beneath the
+    // stable tracked torso. Never substitute an authored neutral or old pose.
+    for(unsigned i=0;i<editedCount;++i)if(binding.parent[i]>=0&&
+        (binding.leg[i]||(binding.arm[i]&&!(rig.trackedHandMask&(binding.leftArm[i]?1u:2u))))) {
         const int parent=binding.parent[i];
         Store(model[i],Load(native[i])*XMMatrixInverse(nullptr,Load(native[parent]))*Load(model[parent]));
     }
+    // The native Wings subtree includes membrane patch joints whose names do
+    // not contain "Wing". Preserve the whole current flapping pose beneath
+    // the tracked spine; mixing native wings with tracked patches stretches
+    // the membrane across the viewer during flight. One parent delta also
+    // preserves legitimately collapsed/stowed wing joints without inverting
+    // their singular transforms.
+    for(unsigned i=0;i<editedCount;++i)if(binding.wing[i]) {
+        const int parent=binding.wingRootParent[i];
+        if(parent<0||static_cast<unsigned>(parent)>=editedCount||!UsableMatrix(native[parent]))return false;
+        Store(model[i],Load(native[i])*XMMatrixInverse(nullptr,Load(native[parent]))*Load(model[parent]));
+    }
     const float weight=rig.liveActionWeight;
-    if(rig.liveAction==2&&weaponWorld[1]&&binding.wrist[1]>=0) {
+    if(rig.liveAction==2&&rig.trackedHandMask==3&&weaponWorld[1]&&binding.wrist[1]>=0&&
+       static_cast<unsigned>(binding.wrist[1])<editedCount) {
         const int wrist=binding.wrist[1];
-        if(static_cast<unsigned>(wrist)>=editedCount)return;
         XMVECTOR determinant;
         const XMMATRIX nativeGuitarInverse=XMMatrixInverse(&determinant,Load(weaponWorld[1]));
-        if(std::fabs(XMVectorGetX(determinant))<.00001f)return;
-        XMMATRIX target=Load(native[wrist])*Load(world)*nativeGuitarInverse*Load(rig.weaponToHead[1])*Load(headToBody);
-        XMVECTOR ts,tq,tt,ss,sq,st;
-        if(XMMatrixDecompose(&ts,&tq,&tt,target)&&XMMatrixDecompose(&ss,&sq,&st,Load(tracked[wrist])))
-            target=XMMatrixScalingFromVector(ss)*XMMatrixRotationQuaternion(tq)*XMMatrixTranslationFromVector(tt);
-        SolveLiveArm(model,1,Blend(Load(tracked[wrist]),target,weight));
+        // A native hidden/stowed guitar can have a collapsed packet. Keep
+        // tracking and live legs when its attachment is unavailable.
+        if(std::isfinite(XMVectorGetX(determinant))&&std::fabs(XMVectorGetX(determinant))>=.00001f) {
+            XMMATRIX target=Load(native[wrist])*Load(world)*nativeGuitarInverse*Load(rig.weaponToHead[1])*Load(headToBody);
+            XMVECTOR ts,tq,tt,ss,sq,st;
+            if(XMMatrixDecompose(&ts,&tq,&tt,target)&&XMMatrixDecompose(&ss,&sq,&st,Load(tracked[wrist])))
+                target=XMMatrixScalingFromVector(ss)*XMMatrixRotationQuaternion(tq)*XMMatrixTranslationFromVector(tt);
+            SolveLiveArm(model,1,Blend(Load(tracked[wrist]),target,weight));
+        }
     } else if(rig.liveAction==1||rig.liveAction==3) {
         for(unsigned i=0;i<editedCount;++i) {
-            if(!binding.arm[i]||(rig.liveAction==1&&binding.leftArm[i]))continue;
+            if(!binding.arm[i]||(rig.liveAction==1&&binding.leftArm[i])||
+                !(rig.trackedHandMask&(binding.leftArm[i]?1u:2u)))continue;
             const int parent=binding.parent[i];
             if(parent<0||static_cast<unsigned>(parent)>=editedCount)continue;
             const XMMATRIX local=Load(tracked[i])*XMMatrixInverse(nullptr,Load(tracked[parent]));
@@ -243,24 +282,31 @@ void RetargetLive(const blvr_xr_bridge::RigFrame& rig,const float headToBody[16]
             const bool finger=static_cast<int>(i)!=binding.wrist[hand]&&Descendant(i,binding.wrist[hand]);
             Store(model[i],(finger?local:Blend(local,authored,weight))*Load(model[parent]));
         }
-        if(rig.supportHeld&&rig.liveAction==1&&binding.wrist[0]>=0&&binding.wrist[1]>=0) {
+        if(rig.supportHeld&&rig.trackedHandMask==3&&rig.liveAction==1&&binding.wrist[0]>=0&&binding.wrist[1]>=0) {
             const XMMATRIX delta=XMMatrixInverse(nullptr,Load(tracked[binding.wrist[1]]))*Load(model[binding.wrist[1]]);
             SolveLiveArm(model,0,Load(tracked[binding.wrist[0]])*delta);
         }
     }
-    for(unsigned i=0;i<editedCount;++i)if(binding.arm[i]||binding.leg[i]) {
+    for(unsigned i=0;i<editedCount;++i)if(binding.arm[i]||binding.leg[i]||binding.wing[i]) {
         const XMMATRIX changed=XMMatrixInverse(nullptr,Load(binding.reference[i]))*Load(model[i]);
         XMFLOAT4X4 finite;XMStoreFloat4x4(&finite,changed);
-        for(float v:*reinterpret_cast<float(*)[16]>(&finite))if(!std::isfinite(v)||std::fabs(v)>100)return;
+        if(!AffineMatrix(reinterpret_cast<const float*>(&finite)))return false;
     }
-    for(unsigned i=0;i<editedCount;++i)if(binding.arm[i]||binding.leg[i])Store(skins[i],XMMatrixInverse(nullptr,Load(binding.reference[i]))*Load(model[i]));
+    for(unsigned i=0;i<editedCount;++i)if(binding.arm[i]||binding.leg[i]||binding.wing[i])Store(skins[i],XMMatrixInverse(nullptr,Load(binding.reference[i]))*Load(model[i]));
     for(int weapon=0;weapon<2;++weapon) {
         const int hand=weapon==0?1:0,wrist=binding.wrist[hand];
         if(wrist<0||static_cast<unsigned>(wrist)>=editedCount)continue;
-        const XMMATRIX socket=Load(rig.weaponToHead[weapon])*Load(headToBody)*XMMatrixInverse(nullptr,Load(tracked[wrist]));
+        const bool trackedHand=(rig.trackedHandMask&(1u<<hand))!=0;
+        // A missing controller keeps the native weapon-to-wrist relationship
+        // from the same render snapshot, then shares the fallback arm's root.
+        const XMMATRIX socket=trackedHand?
+            Load(rig.weaponToHead[weapon])*Load(headToBody)*XMMatrixInverse(nullptr,Load(tracked[wrist])):
+            (weaponWorld[weapon]?Load(weaponWorld[weapon])*XMMatrixInverse(nullptr,Load(world))*XMMatrixInverse(nullptr,Load(native[wrist])):
+                Load(rig.weaponToHead[weapon])*Load(headToBody)*XMMatrixInverse(nullptr,Load(tracked[wrist])));
         Store(weapons[weapon],socket*Load(model[wrist])*Load(world));
+        if(weaponWorld[weapon]&&!AffineMatrix(weapons[weapon],std::numeric_limits<float>::max()))return false;
     }
-    (void)headWorld;
+    return true;
 }
 }
 
@@ -448,6 +494,7 @@ bool PlayerViewRig_Begin(void* scenePointer,void* actor,float eyeWorld[3],bool m
         std::memcpy(savedSkin,skin,paletteCount*12*sizeof(float));
         editedSkin=skin;editedCount=paletteCount;
         editedSnapshot=snapshot;
+        editedScene=scenePointer;
         // Inventory handles, not proximity or any NPC's matching mesh.
         // The two owned weapon render packets use the same observed snapshot
         // layout as Eddie; mutation is limited to this stereo render pair.
@@ -465,7 +512,7 @@ bool PlayerViewRig_Begin(void* scenePointer,void* actor,float eyeWorld[3],bool m
                     auto* render=Read<uint8_t*>(entity,0x38);
                     if(!render||Read<void*>(render,0x10)!=entity||Read<uintptr_t>(render,0)!=base+0xa9796c)continue;
                     auto* packet=FindSnapshot(static_cast<uint8_t*>(scenePointer),render,base);
-                    if(packet)weaponWorld[i]=reinterpret_cast<float*>(packet+0x70);
+                    if(packet) {weaponWorld[i]=reinterpret_cast<float*>(packet+0x70);weaponHandles[i]=handle;}
                 }
             }
         } __except(EXCEPTION_EXECUTE_HANDLER) {weaponWorld[0]=weaponWorld[1]=nullptr;}
@@ -493,22 +540,29 @@ bool PlayerViewRig_ReadTracked(uint64_t frame,int64_t displayTime,uint64_t epoch
     const auto& source=history->slots[frame%blvr_xr_bridge::RigHistory];
     const int32_t sequence=source.sequence;
     if(sequence&1)return false;
-    MemoryBarrier();std::memcpy(&out,&source,sizeof(out));MemoryBarrier();
-    return sequence==source.sequence&&out.magic==blvr_xr_bridge::RigMagic&&out.producerEpoch==epoch&&
-        out.frameId==frame&&out.predictedDisplayTime==displayTime&&out.boneCount<=blvr_xr_bridge::RigBones;
+    blvr_xr_bridge::RigFrame candidate{};
+    MemoryBarrier();std::memcpy(&candidate,&source,sizeof(candidate));MemoryBarrier();
+    if(sequence!=source.sequence||candidate.magic!=blvr_xr_bridge::RigMagic||candidate.producerEpoch!=epoch||
+        candidate.frameId!=frame||candidate.predictedDisplayTime!=displayTime||!candidate.boneCount||
+        candidate.boneCount>blvr_xr_bridge::RigBones||candidate.version!=blvr_xr_bridge::RigVersion||
+        candidate.structBytes!=sizeof(candidate)||candidate.trackedHandMask>3)return false;
+    out=candidate;return true;
 }
 bool PlayerViewRig_ApplyTracked(const blvr_xr_bridge::RigFrame& rig,const float headWorld[16],bool nativeDrivingPose,bool wheelGrip) {
-    if(!editedSkin||!editedSnapshot||rig.boneCount!=binding.count||rig.skeletonSignature!=binding.signature||rig.selectedWeapon>2)return false;
+    if(!editedSkin||!editedSnapshot||rig.boneCount>blvr_xr_bridge::RigBones||rig.boneCount!=binding.count||rig.skeletonSignature!=binding.signature||rig.selectedWeapon>2||
+       rig.version!=blvr_xr_bridge::RigVersion||rig.structBytes!=sizeof(rig)||rig.trackedHandMask>3||rig.supportHeld>1)return false;
     if(rig.controlsSignature!=ControlsSignature(ActiveBindings())||rig.liveAction>3||
         !std::isfinite(rig.liveActionWeight)||rig.liveActionWeight<0||rig.liveActionWeight>1)return false;
     // Never partially apply a malformed transform or substitute a newer rig
     // for the source pose whose eyes will be submitted to OpenXR.
-    for(unsigned i=0;i<rig.boneCount;++i)for(float v:rig.skinToHead[i])if(!std::isfinite(v)||std::fabs(v)>100)return false;
-    for(const auto& weapon:rig.weaponToHead)for(float v:weapon)if(!std::isfinite(v)||std::fabs(v)>100)return false;
+    for(unsigned i=0;i<rig.boneCount;++i)if(!UsableMatrix(rig.skinToHead[i]))return false;
+    for(const auto& weapon:rig.weaponToHead)if(!FiniteMatrix(weapon))return false;
+    if(!UsableMatrix(headWorld,std::numeric_limits<float>::max()))return false;
     // Retain the authored RIGHT-hand wheel grip and native weapon stow. The
     // left shoulder/arm stays tracked so the player can wave out the window.
     __try {
         const float* world=reinterpret_cast<const float*>(editedSnapshot+0x70);
+        if(!UsableMatrix(world,std::numeric_limits<float>::max()))return false;
         float inverse[16]{};
         const float scaleSq=world[0]*world[0]+world[1]*world[1]+world[2]*world[2];
         if(scaleSq<.00001f||!std::isfinite(scaleSq))return false;
@@ -519,10 +573,10 @@ bool PlayerViewRig_ApplyTracked(const blvr_xr_bridge::RigFrame& rig,const float 
         float transformedSkin[MaxBones][16]{},transformedWeapons[2][16]{};
         for(unsigned i=0;i<editedCount;++i)MultiplyCameraMatrices(rig.skinToHead[i],headToBody,transformedSkin[i]);
         for(int i=0;i<2;++i)MultiplyCameraMatrices(rig.weaponToHead[i],headWorld,transformedWeapons[i]);
-        if(!nativeDrivingPose)
-            RetargetLive(rig,headToBody,headWorld,world,transformedSkin,transformedWeapons);
+        if(!nativeDrivingPose&&!RetargetLive(rig,headToBody,world,transformedSkin,transformedWeapons))return false;
         for(unsigned i=0;i<editedCount;++i) {
-            if(binding.retailOnly[i]||(nativeDrivingPose&&(!binding.arm[i]||(wheelGrip&&!binding.leftArm[i]))))continue;
+            if(nativeDrivingPose&&(!binding.arm[i]||(wheelGrip&&!binding.leftArm[i])))continue;
+            if(nativeDrivingPose&&binding.arm[i]&&!(rig.trackedHandMask&(binding.leftArm[i]?1u:2u)))continue;
             for(int r=0;r<3;++r)for(int c=0;c<4;++c)editedSkin[i*12+r*4+c]=transformedSkin[i][c*4+r];
         }
         float neck[3];SkinnedJoint(editedSkin,binding.neck,neck);
@@ -540,15 +594,36 @@ bool PlayerViewRig_ApplyTracked(const blvr_xr_bridge::RigFrame& rig,const float 
         }
         static unsigned applied=0;
         activeSelectedWeapon=nativeDrivingPose?0u:rig.selectedWeapon;
+        activeTrackedHands=rig.trackedHandMask;
+        activeRigPose=rig.frameId;activeRigEpoch=rig.producerEpoch;activeRigDisplayTime=rig.predictedDisplayTime;
         if(++applied<=3||applied%300==0)Log("Tracked Eddie: frame=%llu bones=%u selected=%u weaponPackets=%d/%d",
             static_cast<unsigned long long>(rig.frameId),rig.boneCount,rig.selectedWeapon,weaponWorld[0]!=nullptr,weaponWorld[1]!=nullptr);
         return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) {PlayerViewRig_End();return false;}
 }
+bool PlayerViewRig_ReadWeaponAttachment(uint32_t handle,void* scene,uint64_t poseFrame,
+    int64_t displayTime,uint64_t epoch,TrackedWeaponAttachment& output) {
+    if(!editedSkin||!editedSnapshot||scene!=editedScene||!poseFrame||!epoch||
+       poseFrame!=activeRigPose||displayTime!=activeRigDisplayTime||epoch!=activeRigEpoch||
+       activeSelectedWeapon<1||activeSelectedWeapon>2)return false;
+    const unsigned weapon=activeSelectedWeapon-1;
+    const unsigned requiredHand=weapon==0?2u:1u;
+    if(handle==0xffffffffu||handle!=weaponHandles[weapon]||
+       !(activeTrackedHands&requiredHand)||!editedWeaponWorld[weapon])return false;
+    __try {
+        TrackedWeaponAttachment candidate{};
+        std::memcpy(candidate.nativeWorld,savedWeaponWorld[weapon],64);
+        std::memcpy(candidate.trackedWorld,editedWeaponWorld[weapon],64);
+        if(!AffineMatrix(candidate.nativeWorld,std::numeric_limits<float>::max())||
+           !AffineMatrix(candidate.trackedWorld,std::numeric_limits<float>::max()))return false;
+        candidate.handle=handle;candidate.poseFrame=poseFrame;candidate.epoch=epoch;candidate.displayTime=displayTime;
+        output=candidate;return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
+}
 void PlayerViewRig_PublishRenderedUi(uint64_t sourceFrame,uint64_t poseFrame,
     int64_t displayTime,uint64_t epoch,const float headWorld[16],bool mounted) {
     static unsigned attempts=0;
-    if(++attempts<=3)Log("Driving hands: publish source=%llu pose=%llu epoch=%llu skin=%p snapshot=%p",
+    if(++attempts<=3)Log("Rendered UI: publish source=%llu pose=%llu epoch=%llu skin=%p snapshot=%p",
         sourceFrame,poseFrame,epoch,editedSkin,editedSnapshot);
     if(!editedSkin||!editedSnapshot||!sourceFrame||!epoch)return;
     static HANDLE mapping=nullptr;
@@ -556,14 +631,15 @@ void PlayerViewRig_PublishRenderedUi(uint64_t sourceFrame,uint64_t poseFrame,
     if(!history) {
         mapping=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,
             sizeof(blvr_xr_bridge::NativeHandHistoryBuffer),blvr_xr_bridge::NativeHandMappingName);
-        if(!mapping){Log("Driving hands: mapping failed error=%lu",GetLastError());return;}
-        history=static_cast<blvr_xr_bridge::NativeHandHistoryBuffer*>(MapViewOfFile(mapping,FILE_MAP_WRITE,0,0,0));
-        if(!history){Log("Driving hands: map view failed error=%lu",GetLastError());CloseHandle(mapping);mapping=nullptr;return;}
+        if(!mapping){Log("Rendered UI: mapping failed error=%lu",GetLastError());return;}
+        history=static_cast<blvr_xr_bridge::NativeHandHistoryBuffer*>(MapViewOfFile(mapping,FILE_MAP_WRITE,0,0,sizeof(*history)));
+        if(!history){Log("Rendered UI: map view failed error=%lu",GetLastError());CloseHandle(mapping);mapping=nullptr;return;}
         // Keep the named object handle alive so the other process can open it.
         // A mapped view alone does not retain the object-manager name.
     }
     blvr_xr_bridge::NativeHandFrame output{};
     output.magic=blvr_xr_bridge::NativeHandMagic;output.producerEpoch=epoch;
+    output.version=blvr_xr_bridge::NativeHandVersion;output.pointerValidMask=activeTrackedHands;
     output.sourceFrameId=sourceFrame;output.poseFrameId=poseFrame;output.predictedDisplayTime=displayTime;
     output.flags=mounted?blvr_xr_bridge::NativeUiDriving:0u;
     float inverseHead[16]{};inverseHead[15]=1;
@@ -573,8 +649,7 @@ void PlayerViewRig_PublishRenderedUi(uint64_t sourceFrame,uint64_t poseFrame,
     float bodyToHead[16];MultiplyCameraMatrices(world,inverseHead,bodyToHead);
     if(activeSelectedWeapon==2&&weaponWorld[1]) {
         MultiplyCameraMatrices(weaponWorld[1],inverseHead,output.guitarToHead);
-        bool valid=true;for(float v:output.guitarToHead)valid&=std::isfinite(v)&&std::fabs(v)<20;
-        if(valid)output.flags|=blvr_xr_bridge::NativeUiGuitar;
+        if(UsableMatrix(output.guitarToHead,20))output.flags|=blvr_xr_bridge::NativeUiGuitar;
     }
     const auto normalize=[](float* v) {
         const float n=std::sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);
@@ -604,7 +679,8 @@ void PlayerViewRig_PublishRenderedUi(uint64_t sourceFrame,uint64_t poseFrame,
         const float* tipSkin=editedSkin+joints[4]*12;
         for(int k=0;k<3;++k)tip[k]=refTip[0]*tipSkin[k*4]+refTip[1]*tipSkin[k*4+1]+refTip[2]*tipSkin[k*4+2]+tipSkin[k*4+3];
         for(int k=0;k<3;++k)output.indexTipToHead[hand][k]=tip[0]*bodyToHead[k]+tip[1]*bodyToHead[4+k]+tip[2]*bodyToHead[8+k]+bodyToHead[12+k];
-        output.validMask|=1u<<hand;
+        bool finiteTip=true;for(float value:output.indexTipToHead[hand])finiteTip&=std::isfinite(value)&&std::fabs(value)<20;
+        if(UsableMatrix(output.palmToHead[hand],20)&&finiteTip)output.validMask|=1u<<hand;
     }
     auto& destination=history->slots[sourceFrame%blvr_xr_bridge::NativeHandHistory];
     auto* sequence=reinterpret_cast<volatile LONG*>(&destination.sequence);
@@ -612,7 +688,7 @@ void PlayerViewRig_PublishRenderedUi(uint64_t sourceFrame,uint64_t poseFrame,
     InterlockedExchange(sequence,writing);MemoryBarrier();
     std::memcpy(reinterpret_cast<char*>(&destination)+4,reinterpret_cast<const char*>(&output)+4,sizeof(output)-4);
     MemoryBarrier();InterlockedExchange(sequence,writing+1);
-    if(attempts<=3)Log("Driving hands: published validMask=%u",output.validMask);
+    if(attempts<=3)Log("Rendered UI: published validMask=%u pointerMask=%u",output.validMask,output.pointerValidMask);
 }
 void PlayerViewRig_End() {
     for(int i=0;i<2;++i)if(editedWeaponWorld[i]) {
@@ -625,6 +701,9 @@ void PlayerViewRig_End() {
         editedSkin=nullptr;editedCount=0;
     }
     editedSnapshot=nullptr;
+    editedScene=nullptr;weaponHandles[0]=weaponHandles[1]=0xffffffffu;
+    activeRigPose=activeRigEpoch=0;activeRigDisplayTime=0;
     activeSelectedWeapon=0;
+    activeTrackedHands=0;
 }
 }

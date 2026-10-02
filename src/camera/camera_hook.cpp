@@ -9,8 +9,10 @@
 #include "terrain_projection.h"
 #include "camera_relative_effects.h"
 #include "player_view_rig.h"
+#include "native_build_ui.h"
 #include "../input/control_bindings.h"
 #include "../bridge/eddie_dimensions.h"
+#include "../bridge/blvr_ui_bridge.h"
 #include "../input/retail_input_bridge.h"
 #include "../input/vr_prompts.h"
 #include "../openxr/xr_host.h"
@@ -137,6 +139,9 @@ static float g_EddieRootY = 0.0f;
 static float g_EddieRootZ = 0.0f;
 static bool g_HasEddieRoot = false;
 static const uint8_t* g_GameplayCameraController = nullptr;
+static volatile LONG g_GameplayOwnerTick = 0;
+static bool g_NativeBuildUiSupported = false;
+static bool g_NativeBuildStageSelectionSupported = false;
 
 static float g_EddieTargetX = 0.0f;
 static float g_EddieTargetY = 0.0f;
@@ -306,6 +311,145 @@ static constexpr uintptr_t DESCRIPTOR_WORLD = 0xb7a86c;
 static constexpr uintptr_t DESCRIPTOR_PROJECTION = 0xb7a878;
 static constexpr uintptr_t DESCRIPTOR_WORLD_TO_PROJECTION = 0xb7a854;
 static uintptr_t g_ExecutableBase = 0;
+
+static bool NativeBuildUiLayoutSupported(uintptr_t base) {
+    // These independent sites bind the observed CoPlayer/build-owner layout
+    // to the supported retail code. Never interpret this state on a mismatch.
+    static const uint8_t resolver[]={0x83,0xbf,0xfc,0x01,0x00,0x00,0x00,0x56,0x75,0x68};
+    static const uint8_t open[]={0x88,0x5e,0x29,0xc6,0x46,0x64,0x00};
+    static const uint8_t close[]={0xc6,0x43,0x29,0x00,0xc6,0x43,0x64,0x00};
+    static const uint8_t publish[]={0x0f,0xb6,0x4e,0x29,0x8b,0x56,0x58};
+    __try {
+        const auto* dos=reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        if(!base||dos->e_magic!=IMAGE_DOS_SIGNATURE||dos->e_lfanew<=0||dos->e_lfanew>0x100000)return false;
+        const auto* pe=reinterpret_cast<const IMAGE_NT_HEADERS32*>(base+dos->e_lfanew);
+        return pe->Signature==IMAGE_NT_SIGNATURE&&pe->FileHeader.Machine==IMAGE_FILE_MACHINE_I386&&
+            pe->OptionalHeader.Magic==IMAGE_NT_OPTIONAL_HDR32_MAGIC&&pe->OptionalHeader.SizeOfImage>0xb79d94&&
+            std::memcmp(reinterpret_cast<const void*>(base+0x38ed00),resolver,sizeof(resolver))==0&&
+            std::memcmp(reinterpret_cast<const void*>(base+0x4fed06),open,sizeof(open))==0&&
+            std::memcmp(reinterpret_cast<const void*>(base+0x4fef60),close,sizeof(close))==0&&
+            std::memcmp(reinterpret_cast<const void*>(base+0x5002fc),publish,sizeof(publish))==0;
+    } __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
+}
+
+static bool NativeBuildStageSelectionLayoutSupported(uintptr_t base) {
+    // The native selected-index getter and IsTierUpgrade property descriptor
+    // independently bind the selected-array join and boolean offset0x5A.
+    // These code bytes contain no relocated absolute addresses.
+    static const uint8_t selected[]={0x56,0x8b,0x72,0x0c,0x85,0xf6,0x74,0x1a,
+        0x8b,0x0a,0xc1,0xe9,0x06};
+    static const uint8_t tierOffset[]={0xc7,0x46,0x20,0x5a,0x00,0x04,0x00};
+    __try {
+        return base&&std::memcmp(reinterpret_cast<const void*>(base+0x510700),selected,sizeof(selected))==0&&
+            std::memcmp(reinterpret_cast<const void*>(base+0x424ef1),tierOffset,sizeof(tierOffset))==0;
+    } __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
+}
+
+static uint32_t ReadNativeBuildUiFlags(bool* stageUpgradeSelected=nullptr) {
+    if(stageUpgradeSelected)*stageUpgradeSelected=false;
+    const uint32_t age=GetTickCount()-static_cast<DWORD>(g_GameplayOwnerTick);
+    if(!g_NativeBuildUiSupported||age>=500u||!g_GameplayCameraController)return 0;
+    __try {
+        // The current chase actor (or its verified rider) owns local input.
+        // An AI avatar may have the same name, so name matching is insufficient.
+        const auto* ctrl=g_GameplayCameraController;
+        if(*reinterpret_cast<const uintptr_t*>(ctrl)!=g_ExecutableBase+0xad4ffc)return 0;
+        const auto* table=*reinterpret_cast<const uint8_t* const*>(g_ExecutableBase+0xb79d8c);
+        const uint32_t capacity=*reinterpret_cast<const uint32_t*>(g_ExecutableBase+0xb79d90);
+        const uint32_t cameraHandle=*reinterpret_cast<const uint32_t*>(ctrl+0x1250);
+        if(!table||!capacity||capacity>0x100000u||cameraHandle>=capacity)return 0;
+        void* cameraActor=*reinterpret_cast<void* const*>(table+cameraHandle*12);
+        if(cameraActor!=g_pPlayerCharacter)return 0;
+        auto* actor=static_cast<const uint8_t*>(PlayerViewRig_ResolveActor(cameraActor));
+        if(!actor)return 0;
+        const uint32_t handle=*reinterpret_cast<const uint32_t*>(actor+0x14);
+        if(handle>=capacity)return 0;
+        const auto* player=*reinterpret_cast<const uint8_t* const*>(actor+0x28);
+        if(!player||*reinterpret_cast<const uintptr_t*>(player)!=g_ExecutableBase+0xab71ec)return 0;
+        const auto* build=*reinterpret_cast<const uint8_t* const*>(player+0x1fc);
+        if(!build)return 0;
+        const auto* liveBuild=static_cast<const volatile uint8_t*>(build);
+        NativeBuildUiOwnership state{
+            reinterpret_cast<uintptr_t>(actor),
+            *reinterpret_cast<const uintptr_t*>(table+handle*12),
+            *reinterpret_cast<const uintptr_t*>(player+0x10),
+            reinterpret_cast<uintptr_t>(build),
+            0,
+            *reinterpret_cast<const uintptr_t*>(build+0x58),
+            handle,*reinterpret_cast<const uint32_t*>(build+0x2c),capacity,
+            liveBuild[0x29],0};
+        NativeBuildStageSelection selection{};
+        if(stageUpgradeSelected&&g_NativeBuildStageSelectionSupported&&state.open==1u&&
+           state.actor==state.registeredActor&&state.actor==state.playerOwner&&
+           state.controllerHandle==handle&&state.movie) {
+            const auto* radial=*reinterpret_cast<const uint8_t* const*>(build+0x24);
+            if(radial) {
+                selection.radial=reinterpret_cast<uintptr_t>(radial);
+                selection.radialCount=*reinterpret_cast<const uint32_t*>(radial)>>6;
+                selection.itemCount=*reinterpret_cast<const uint32_t*>(build)>>6;
+                selection.node=*reinterpret_cast<const uintptr_t*>(radial+0x0c);
+                const auto* radialEntries=*reinterpret_cast<const uintptr_t* const*>(radial+0x08);
+                const auto* items=*reinterpret_cast<const uintptr_t* const*>(build+0x08);
+                selection.radialEntries=reinterpret_cast<uintptr_t>(radialEntries);
+                selection.items=reinterpret_cast<uintptr_t>(items);
+                if(selection.node&&radialEntries&&items&&selection.radialCount&&
+                    selection.radialCount<=128u&&selection.itemCount&&selection.itemCount<=128u) {
+                    for(uint32_t i=0;i<selection.radialCount;++i) {
+                        if(radialEntries[i]==selection.node) {
+                            selection.index=i;
+                            ++selection.matchingNodes;
+                        }
+                    }
+                    if(selection.matchingNodes==1u&&selection.index<selection.itemCount) {
+                        selection.item=items[selection.index];
+                        if(selection.item) {
+                            const auto* item=reinterpret_cast<const volatile uint8_t*>(selection.item);
+                            selection.isTierUpgrade=item[0x5a];
+                            // Selection may change as the stick moves or its arrays are rebuilt.
+                            selection.confirmedRadial=*reinterpret_cast<const volatile uintptr_t*>(build+0x24);
+                            selection.confirmedNode=*reinterpret_cast<const volatile uintptr_t*>(radial+0x0c);
+                            selection.confirmedRadialEntries=*reinterpret_cast<const volatile uintptr_t*>(radial+0x08);
+                            selection.confirmedItems=*reinterpret_cast<const volatile uintptr_t*>(build+0x08);
+                            selection.confirmedRadialCount=*reinterpret_cast<const volatile uint32_t*>(radial)>>6;
+                            selection.confirmedItemCount=*reinterpret_cast<const volatile uint32_t*>(build)>>6;
+                            if(selection.confirmedRadialEntries==selection.radialEntries&&
+                               selection.confirmedItems==selection.items&&
+                               selection.index<selection.confirmedRadialCount&&
+                               selection.index<selection.confirmedItemCount&&
+                               reinterpret_cast<const volatile uintptr_t*>(radialEntries)[selection.index]==selection.node) {
+                                selection.confirmedItem=reinterpret_cast<const volatile uintptr_t*>(items)[selection.index];
+                                selection.confirmedIsTierUpgrade=item[0x5a];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Recheck after reading the owner so closing or replacing the menu
+        // cannot reuse a captured open bit for another native object.
+        state.confirmedBuild=*reinterpret_cast<const volatile uintptr_t*>(player+0x1fc);
+        state.confirmedOpen=liveBuild[0x29];
+        if(stageUpgradeSelected) {
+            // Preserve the original local camera/actor join through the longer read.
+            if(g_GameplayCameraController!=ctrl||g_pPlayerCharacter!=cameraActor||
+               *reinterpret_cast<const volatile uintptr_t*>(actor+0x28)!=reinterpret_cast<uintptr_t>(player)||
+               *reinterpret_cast<const volatile uint32_t*>(ctrl+0x1250)!=cameraHandle||
+               *reinterpret_cast<const volatile uintptr_t*>(table+handle*12)!=state.actor||
+               *reinterpret_cast<const volatile uint32_t*>(build+0x2c)!=handle)return 0;
+            const uint32_t finalAge=GetTickCount()-static_cast<DWORD>(g_GameplayOwnerTick);
+            *stageUpgradeSelected=NativeBuildStageUpgradeSelected(state,selection,
+                g_NativeBuildStageSelectionSupported,finalAge);
+        }
+        return NativeBuildUiOpen(state,true,age)?blvr_ui_bridge::BuildRadial:0u;
+    } __except(EXCEPTION_EXECUTE_HANDLER) {return 0;}
+}
+
+bool CameraHook_IsBuildUiOpen() {return ReadNativeBuildUiFlags()!=0u;}
+bool CameraHook_IsBuildStageUpgradeSelected() {
+    bool stageUpgradeSelected=false;
+    ReadNativeBuildUiFlags(&stageUpgradeSelected);
+    return stageUpgradeSelected;
+}
 
 extern "C" __declspec(naked) uint32_t CallOriginalRenderSceneCandidate(void*, void*) {
     __asm {
@@ -587,13 +731,13 @@ static void ApplyHeadsetVisibility(void* output) {
             std::memcpy(ps[i],eyes[i].pose.pos,sizeof(ps[i]));
             std::memcpy(fovs[i],eyes[i].fov,sizeof(fovs[i]));
         }
-        if(!HeadsetCullTangents(headPose.quat,headPose.pos,qs,ps,fovs,tx,ty))return;
         auto* block=static_cast<uint8_t*>(output);
         float projection[16],inverseProjection[16],world[16],view[16],viewProjection[16],inverseViewProjection[16];
-        std::memcpy(projection,block+0xb0,sizeof(projection));
-        projection[0]=1/tx;projection[5]=1/ty;projection[8]=projection[9]=0;
+        if(!HeadsetCullProjection(reinterpret_cast<const float*>(block+0xb0),headPose.quat,
+                                  headPose.pos,qs,ps,fovs,projection))return;
+        tx=1/projection[0];ty=1/projection[5];
         std::memcpy(world,head.viewToCamWorld,sizeof(world));
-        for(int k=0;k<3;++k)world[12+k]=head.eye[k]-3.f*head.forward[k];
+        for(int k=0;k<3;++k)world[12+k]=head.eye[k]-HeadsetCullSetbackMeters*head.forward[k];
         if(!InvertCameraMatrix(projection,inverseProjection)||!InvertCameraMatrix(world,view))return;
         MatrixMultiply(view,projection,viewProjection);
         if(!InvertCameraMatrix(viewProjection,inverseViewProjection))return;
@@ -687,6 +831,7 @@ static void __stdcall Hook_SetCameraTransform(
                     pCameraCtrl, handle, actor, *reinterpret_cast<void**>(static_cast<uint8_t*>(actor) + 0x18));
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) { g_pPlayerCharacter=nullptr; }
+        InterlockedExchange(&g_GameplayOwnerTick,static_cast<LONG>(GetTickCount()));
         g_OriginalCameraEye[0] = eyeX;
         g_OriginalCameraEye[1] = eyeY;
         g_OriginalCameraEye[2] = eyeZ;
@@ -1501,13 +1646,18 @@ static bool __fastcall Hook_FlashRender(void* snapshot, void*, void* renderer) {
     // The consumed transition, rather than that return value, identifies it.
     const uint32_t soloFlags = GetTickCount() - static_cast<DWORD>(g_SoloUiTick) < 500u
         ? static_cast<uint32_t>(g_SoloUiFlags) : 0u;
-    if (pending) VideoCapture_CaptureNativeUi(device, g_StereoSourceFrame, soloFlags);
+    const uint32_t buildFlags=ReadNativeBuildUiFlags();
+    if (pending) VideoCapture_CaptureNativeUi(device, g_StereoSourceFrame, soloFlags|buildFlags);
     return rendered;
 }
 
 bool CameraHook_Init() {
     uintptr_t exeBase = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
     g_ExecutableBase = exeBase;
+    g_NativeBuildUiSupported=NativeBuildUiLayoutSupported(exeBase);
+    g_NativeBuildStageSelectionSupported=g_NativeBuildUiSupported&&NativeBuildStageSelectionLayoutSupported(exeBase);
+    Log("CameraHook: native build UI layout %s",g_NativeBuildUiSupported?"verified":"unsupported; skipped");
+    Log("CameraHook: native build stage selection layout %s",g_NativeBuildStageSelectionSupported?"verified":"unsupported; skipped");
     g_RenderFlush = reinterpret_cast<void*>(exeBase + 0x2dc860);
     g_RenderLighting = reinterpret_cast<void*>(exeBase + 0x316c20);
     g_RenderWorldComposite = reinterpret_cast<void*>(exeBase + 0x2f6e60);

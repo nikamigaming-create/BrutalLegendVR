@@ -22,6 +22,7 @@
 #include "guitar_solo_interaction.h"
 #include "pose_bridge.h"
 #include "presentation_cache.h"
+#include "rendered_ui_join.h"
 #include "vehicle_steering.h"
 #include "../input/touch_controls.h"
 #include "../input/pose_controls.h"
@@ -2007,13 +2008,22 @@ private:
             const uint64_t tick=GetTickCount64();
             const float seconds=lastLobbyTick_ ? static_cast<float>(tick-lastLobbyTick_)*.001f : 1.f/90;
             lastLobbyTick_=tick;
-            if(enteredWorld_&&!nativeDriving_) soloInteraction_.prepare(frame,nativeUi_.flags(),tick);
+            const bool nativeBuildWheel=(nativeUi_.flags()&blvr_ui_bridge::BuildRadial)!=0;
+            if(nativeBuildWheel) soloInteraction_.reset();
+            else if(enteredWorld_&&!nativeDriving_) soloInteraction_.prepare(frame,nativeUi_.flags(),tick);
             eddieLobby_.update(frame,seconds,!enteredWorld_,nativeUi_.flags(),nativeDriving_);
             blvr_xr_host::UiMounts mounts{};
             eddieLobby_.exportUiMounts(mounts);
             locatedViewHistory_[frame.frameId%locatedViewHistory_.size()].uiMounts=mounts;
-            if(enteredWorld_&&!nativeDriving_ && soloInteraction_.touch(frame,mounts,nativeUi_.panels(),nativeUi_.flags(),tick))
-                logger_.write("XRHost: guitar headstock fingertip selected native solo wedge");
+            std::array<blvr_xr_host::UiMounts,EyeCount> contactMounts{};
+            nativeUiInteraction_.read(gameFrame_,poseBridge_.epoch(),frame,contactMounts);
+            if(enteredWorld_&&!nativeDriving_&&!nativeBuildWheel && soloInteraction_.touch(frame,contactMounts,nativeUi_.panels(),nativeUi_.flags(),tick)) {
+                std::ostringstream message;
+                message<<"XRHost: guitar headstock fingertip selected native solo wedge transaction="<<gameFrame_.transactionId
+                    <<" source="<<gameFrame_.sourceFrameId[0]<<'/'<<gameFrame_.sourceFrameId[1]
+                    <<" pose="<<gameFrame_.poseSequence[0]<<'/'<<gameFrame_.poseSequence[1];
+                logger_.write(message.str());
+            }
             const unsigned weapon=eddieLobby_.selectedWeapon();
             const unsigned physicalAction=eddieLobby_.physicalAction();
             static unsigned previousPhysicalAction=0;
@@ -2027,6 +2037,7 @@ private:
                 frame.controllers[1].activeFlags|=BLVR::SoloNotesMetadata;
             if(nativeUi_.flags()&blvr_ui_bridge::SoloRadial)
                 frame.controllers[1].activeFlags|=BLVR::SoloRadialMetadata;
+            if(nativeBuildWheel) frame.controllers[1].activeFlags|=BLVR::BuildRadialMetadata;
             if(nativeDriving_) frame.controllers[1].activeFlags|=BLVR::DrivingMetadata;
             float wheel=0;
             if(vehicleSteering_.update(frame,enteredWorld_&&nativeDriving_&&!recenterChord,seconds,wheel)) {
@@ -2122,6 +2133,7 @@ private:
         if (referenceSpaceGeneration_ == 0u)
             ++referenceSpaceGeneration_;
         gamePresentationCache_.invalidate();
+        nativeUiInteraction_.clear();
         menuQuadLatch_.reset();
         for (LocatedViewSample& sample : locatedViewHistory_)
             sample = LocatedViewSample {};
@@ -2244,6 +2256,7 @@ private:
                 loggedDrivingUi_ = false;
                 lastWorldValid_ = false;
                 soloInteraction_.reset();
+                nativeUiInteraction_.clear();
                 menuQuadLatch_ = {};
                 presentationEpoch_ = gameFrame_.producerEpoch;
             }
@@ -2359,6 +2372,7 @@ private:
             else if (gameMode_)
             {
                 gamePresentationCache_.invalidate();
+                nativeUiInteraction_.clear();
             }
 
             gameFramePoseMatched_ =
@@ -2371,6 +2385,7 @@ private:
                 && gameFrame_
                 && !quadPresentation)
             {
+                nativeUiInteraction_.clear();
                 if (gameFrame_.requiresExactCapturePose())
                 {
                     // Temporal eyes were rendered on different Brutal Legend frames;
@@ -2399,16 +2414,34 @@ private:
                     {
                         submittedViews = renderedViews;
                         bool drivingHands[EyeCount]{};
+                        std::array<blvr_xr_host::UiMounts,EyeCount> hostMounts{},renderedMounts{};
+                        std::array<bool,EyeCount> uiMatched{};
                         for(uint32_t eye=0;eye<EyeCount;++eye) {
                             const auto& source=locatedViewHistory_[gameFrame_.poseSequence[eye]%locatedViewHistory_.size()];
-                            activeUiMounts_[eye]=source.uiMounts;
+                            hostMounts[eye]=source.uiMounts;
                             blvr_xr_bridge::Pose head{};
                             if(deriveHmdPoseFromViews(head,source.views)
                                 &&eddieLobby_.readRenderedUi(poseBridge_.epoch(),
                                     gameFrame_.sourceFrameId[eye],gameFrame_.poseSequence[eye],
-                                    gameFrame_.renderedDisplayTime[eye],head,activeUiMounts_[eye],drivingHands[eye])) {
+                                    gameFrame_.renderedDisplayTime[eye],head,renderedMounts[eye],drivingHands[eye])) {
+                                uiMatched[eye]=true;
                                 if(!loggedDrivingUi_)logger_.write("XRHost: wrist and guitar UI follow actual rendered geometry at exact source frame");
                                 loggedDrivingUi_=true;
+                            }
+                        }
+                        const bool requiresRenderedUi=blvr_xr_host::RequiresRenderedUiGeometry(gameFrame_);
+                        activeUiMounts_=blvr_xr_host::SelectRenderedUiPair(hostMounts,renderedMounts,uiMatched,requiresRenderedUi);
+                        nativeUiInteraction_.capture(gameFrame_,poseBridge_.epoch(),referenceSpaceGeneration_,renderedMounts,uiMatched);
+                        if(requiresRenderedUi&&(!uiMatched[0]||!uiMatched[1])) {
+                            ++missingNativeUiPairs_;
+                            const uint64_t now=GetTickCount64();
+                            if(!lastNativeUiMissTick_||now-lastNativeUiMissTick_>=2000u) {
+                                std::ostringstream message;
+                                message<<"XRHost: native UI geometry missing; both-eye overlays withheld transaction="
+                                    <<gameFrame_.transactionId<<" source="<<gameFrame_.sourceFrameId[0]<<'/'
+                                    <<gameFrame_.sourceFrameId[1]<<" matched="<<uiMatched[0]<<'/'<<uiMatched[1]
+                                    <<" misses="<<missingNativeUiPairs_;
+                                logger_.write(message.str());lastNativeUiMissTick_=now;
                             }
                         }
                         nativeDriving_=drivingHands[0]&&drivingHands[1];
@@ -2802,7 +2835,8 @@ private:
             for(const auto& panel:nativeUi_.panels()) {
                 if(!(mounts.validMask&(1u<<panel.mount))) continue;
                 worldQuad_.draw(device_.Get(), context_.Get(), nativeUiView_, *hudEye,
-                    mounts.poses[panel.mount],panel.width,panel.height,panel.uv);
+                    blvr_xr_host::attachedUiPanelPose(panel,mounts.poses[panel.mount]),
+                    panel.width,panel.height,panel.uv);
             }
             if((nativeUi_.flags()&blvr_ui_bridge::SoloNotes)&&(mounts.validMask&(1u<<blvr_xr_host::GuitarHeadstock))) {
                 auto pose=mounts.poses[blvr_xr_host::GuitarHeadstock];
@@ -3087,7 +3121,9 @@ private:
     ID3D11ShaderResourceView* nativeUiView_ = nullptr;
     blvr_xr_host::GuitarSoloInteraction soloInteraction_;
     std::array<blvr_xr_host::UiMounts,EyeCount> activeUiMounts_{};
+    blvr_xr_host::RenderedUiInteractionPair nativeUiInteraction_;
     bool loggedDrivingUi_=false;
+    uint64_t missingNativeUiPairs_=0,lastNativeUiMissTick_=0;
     bool nativeDriving_=false;
     blvr_xr_host::VehicleSteering vehicleSteering_;
     std::array<XrCompositionLayerProjectionView, EyeCount> lastWorldViews_{};
@@ -3226,6 +3262,8 @@ int main(int argc, char** argv)
                     "Swapchain wait result classifier self-test failed.");
             }
             std::string protocolFailure;
+            if (!blvr_xr_host::RenderedUiJoinSelfTest(protocolFailure))
+                throw std::runtime_error("Rendered UI geometry join test failed: "+protocolFailure);
             if (!blvr_xr_host::VehicleSteeringSelfTest(protocolFailure))
                 throw std::runtime_error("Vehicle steering test failed: " + protocolFailure);
             if (!blvr_xr_host::AttachedUiInteractionSelfTest(protocolFailure))
@@ -3277,7 +3315,7 @@ int main(int argc, char** argv)
                 "stationaryUiQuad=1 uiAspect=1 routeSwitch=1 "
                 "heldFrameReuse=1 exactPoseCache=1 parentExactPose=1 "
                 "strictSwapchainWait=1 referenceSpaceReset=1 "
-                "srgbDecode=1 "
+                "srgbDecode=1 nativeUiGeometryPair=1 "
                 "runtimeUntouched=1");
             return 0;
         }

@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <wrl/client.h>
 #include <vector>
+#include <cstring>
 
 namespace blvr_xr_host {
 // The native timed sequence keeps its original A/X/Y artwork. This live

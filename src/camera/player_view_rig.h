@@ -19,5 +19,15 @@ void PlayerViewRig_PublishRenderedUi(uint64_t sourceFrame,uint64_t poseFrame,
     int64_t displayTime,uint64_t epoch,const float headWorld[16],bool mounted);
 bool PlayerViewRig_ReadTracked(uint64_t frame,int64_t displayTime,uint64_t epoch,
                               blvr_xr_bridge::RigFrame&);
+// Only available while the exact stereo scene owns its tracked weapon edit.
+// The source matrix is the original render packet, never a simulation pose.
+struct TrackedWeaponAttachment {
+    float nativeWorld[16]{},trackedWorld[16]{};
+    uint32_t handle=0xffffffffu;
+    uint64_t poseFrame=0,epoch=0;
+    int64_t displayTime=0;
+};
+bool PlayerViewRig_ReadWeaponAttachment(uint32_t handle,void* scene,
+    uint64_t poseFrame,int64_t displayTime,uint64_t epoch,TrackedWeaponAttachment&);
 void PlayerViewRig_End();
 }

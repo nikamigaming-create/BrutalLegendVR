@@ -2,9 +2,12 @@
 #include "vr_prompt_text.h"
 #include "native_prompt_format.h"
 #include "../bridge/blvr_prompt_bridge.h"
+#include "../camera/camera_hook.h"
 #include "../diagnostics/log.h"
 #include "MinHook.h"
+#include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <mutex>
 #include <unordered_set>
 
@@ -36,9 +39,49 @@ std::mutex localizedMutex;
 std::unordered_set<std::string> localizedStrings;
 std::unordered_set<std::string> loggedHints;
 
+// Keep guarded native reads in a plain leaf: the logging function's lazy
+// diagnostic initialization requires C++ unwinding, which MSVC forbids in SEH.
+__declspec(noinline) bool ReadBuildHintSource(void** text,wchar_t* units,
+    unsigned& count,bool& truncated) {
+    __try {
+        if(!text||!*text)return false;
+        const wchar_t* source=*static_cast<const wchar_t* const*>(*text);
+        if(!source)return false;
+        while(count<128&&source[count]) {units[count]=source[count];++count;}
+        truncated=count==128&&source[count]!=0;
+        return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
+}
+
+// Read-only, explicitly enabled and bounded to four original formatter inputs.
+// The exact UTF-16 units expose alias/markup changes made before this hook.
+void LogBuildHintSource(void** text,bool buildContext) {
+    static const bool enabled=[] {
+        char value[16]{};
+        GetEnvironmentVariableA("BLVR_BUILD_HINT_DIAGNOSTIC",value,sizeof(value));
+        return std::strcmp(value,"1")==0||_stricmp(value,"true")==0;
+    }();
+    static volatile LONG samples=0;
+    if(!enabled||samples>=4)return;
+    wchar_t units[129]{};
+    unsigned count=0;bool truncated=false;
+    if(!ReadBuildHintSource(text,units,count,truncated))return;
+    if(!std::wcsstr(units,L"TO RECRUIT"))return;
+    const LONG sample=InterlockedIncrement(&samples);
+    if(sample>4)return;
+    char utf8[385]{},hex[641]{};
+    WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,units,-1,utf8,sizeof(utf8),nullptr,nullptr);
+    for(unsigned i=0;i<count;++i)
+        std::snprintf(hex+i*5,sizeof(hex)-i*5,"%04X ",static_cast<unsigned>(units[i]));
+    Log("Build hint source sample=%ld build=%u units=%u truncated=%u utf8='%s' codeunits=[%s]",
+        sample,buildContext?1u:0u,count,truncated?1u:0u,utf8,hex);
+}
+
 void __stdcall HookFormat(void** text) {
     std::string rendered;
-    if(RemapNativePrompt(text,nativeAssign,&rendered)) {
+    const bool buildContext=CameraHook_IsBuildUiOpen();
+    LogBuildHintSource(text,buildContext);
+    if(RemapNativePrompt(text,nativeAssign,&rendered,buildContext)) {
         std::lock_guard<std::mutex> lock(localizedMutex);
         if(loggedHints.size()<48&&loggedHints.emplace(rendered).second)
             Log("Quest hint: %s",rendered.c_str());
@@ -64,7 +107,7 @@ bool ActiveCard() {
 }
 void __stdcall HookText(void* movie,const void* name,const char* source) {
     if(!source) {originalText(movie,name,source);return;}
-    const std::string replaced=VrPromptText(source);
+    const std::string replaced=VrPromptText(source,ActiveBindings(),CameraHook_IsBuildUiOpen());
     if(showingCard) {
         const char* property=NameText(name);
         if(property&&std::strcmp(property,"cardname")==0)cardTitle=replaced;
@@ -73,7 +116,7 @@ void __stdcall HookText(void* movie,const void* name,const char* source) {
 }
 void __stdcall HookIndexed(void* movie,const void* name,unsigned index,const char* source) {
     if(!source) {originalIndexed(movie,name,index,source);return;}
-    const std::string replaced=VrPromptText(source);
+    const std::string replaced=VrPromptText(source,ActiveBindings(),CameraHook_IsBuildUiOpen());
     if(showingCard) {
         const char* property=NameText(name);
         if(property&&std::strcmp(property,"info")==0) {
@@ -85,13 +128,13 @@ void __stdcall HookIndexed(void* movie,const void* name,unsigned index,const cha
 }
 void __stdcall HookLiteral(void* movie,const char* property,const char* source) {
     if(!source) {originalLiteral(movie,property,source);return;}
-    const std::string replaced=VrPromptText(source);
+    const std::string replaced=VrPromptText(source,ActiveBindings(),CameraHook_IsBuildUiOpen());
     originalLiteral(movie,property,replaced.c_str());
 }
 const char* __fastcall HookLocalized(void* unused,const unsigned* id) {
     const char* source=originalLocalized(unused,id);
     if(!source || !std::strchr(source,'/'))return source;
-    std::string replaced=VrPromptText(source);
+    std::string replaced=VrPromptText(source,ActiveBindings(),CameraHook_IsBuildUiOpen());
     if(replaced==source)return source;
     // Native HUDs retain localization pointers. Intern the replacement for
     // process lifetime; a temporary/thread-local buffer would corrupt them.

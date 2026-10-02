@@ -20,7 +20,7 @@ static_assert(NativeActionCount==51);
 struct TouchControls {
     float lx=0,ly=0,rx=0,ry=0,lt=0,rt=0,lg=0,rg=0;
     bool a=false,b=false,x=false,y=false,leftClick=false,rightClick=false,menu=false;
-    bool rigMetadata=false,soloNotes=false,soloRadial=false,driving=false,hostRadial=false,hostAccept=false,hostConfirm=false;
+    bool rigMetadata=false,soloNotes=false,soloRadial=false,buildRadial=false,driving=false,hostRadial=false,hostAccept=false,hostConfirm=false;
     unsigned weapon=0,physical=0,soloStrumNote=0;
 };
 enum class TouchInput { A,B,X,Y,LeftTrigger,RightTrigger,LeftGrip,RightGrip,
@@ -38,13 +38,14 @@ struct ControlBindings {
     TouchInput supportLeft=TouchInput::LeftGrip,supportRight=TouchInput::RightGrip;
     TouchInput soloFret=TouchInput::LeftGrip;
     TouchInput soloAcceptAlternate=TouchInput::RightTrigger,openingConfirmAlternate=TouchInput::RightTrigger;
+    TouchInput buildResearchAlternate=TouchInput::LeftTrigger;
     TouchStick movementStick=TouchStick::Left,turnStick=TouchStick::Right;
     TouchStick radialStick=TouchStick::Right,openingMenuStick=TouchStick::Right;
 };
 using TI=TouchInput;
 // The input evaluator and all native hint aliases consume this same table.
 inline constexpr ControlBindings DefaultBindings{{{
-    {TI::A},{TI::B},{TI::A},{TI::Y},{TI::Menu},{TI::X,true},
+    {TI::A},{TI::B},{TI::X},{TI::Y},{TI::Menu},{TI::X,true},
     {TI::LeftUp},{TI::LeftDown},{TI::LeftLeft},{TI::LeftRight},
     {TI::LeftTrigger,true},{TI::RightTrigger,true},{TI::B,true},{TI::A,true},
     {TI::A},{TI::B},{TI::A},{TI::X,true},{TI::Menu},
@@ -60,16 +61,18 @@ inline constexpr ControlBindings DefaultBindings{{{
 ControlBindings ActiveBindings();
 uint64_t ControlsSignature(const ControlBindings&);
 inline float TouchValue(const TouchControls& in,TouchInput key) {
+    const bool leftVertical=std::fabs(in.ly)>=std::fabs(in.lx);
     const bool vertical=std::fabs(in.ry)>=std::fabs(in.rx);
+    const auto analog=[](float value){return std::isfinite(value)?std::clamp(value,0.f,1.f):0.f;};
     switch(key) {
     case TI::A:return in.a?1.f:0.f; case TI::B:return in.b?1.f:0.f;
     case TI::X:return in.x?1.f:0.f; case TI::Y:return in.y?1.f:0.f;
-    case TI::LeftTrigger:return in.lt;case TI::RightTrigger:return in.rt;
-    case TI::LeftGrip:return in.lg;case TI::RightGrip:return in.rg;
+    case TI::LeftTrigger:return analog(in.lt);case TI::RightTrigger:return analog(in.rt);
+    case TI::LeftGrip:return analog(in.lg);case TI::RightGrip:return analog(in.rg);
     case TI::LeftClick:return in.leftClick?1.f:0.f;case TI::RightClick:return in.rightClick?1.f:0.f;
     case TI::Menu:return in.menu?1.f:0.f;
-    case TI::LeftUp:return in.ly>.55f?1.f:0.f;case TI::LeftDown:return in.ly<-.55f?1.f:0.f;
-    case TI::LeftLeft:return in.lx<-.55f?1.f:0.f;case TI::LeftRight:return in.lx>.55f?1.f:0.f;
+    case TI::LeftUp:return leftVertical&&in.ly>.55f?1.f:0.f;case TI::LeftDown:return leftVertical&&in.ly<-.55f?1.f:0.f;
+    case TI::LeftLeft:return !leftVertical&&in.lx<-.55f?1.f:0.f;case TI::LeftRight:return !leftVertical&&in.lx>.55f?1.f:0.f;
     case TI::RightUp:return vertical&&in.ry>.55f?1.f:0.f;
     case TI::RightDown:return vertical&&in.ry<-.55f?1.f:0.f;
     case TI::RightLeft:return !vertical&&in.rx<-.55f?1.f:0.f;
@@ -99,6 +102,11 @@ inline std::string EarthshakerChordLabel(const ControlBindings& bindings=ActiveB
 }
 inline bool CommandHeld(const TouchControls& in,const ControlBindings& bindings=ActiveBindings()) {
     return TouchValue(in,bindings.commandClick)>.5f&&TouchValue(in,bindings.commandGrip)>.65f;
+}
+inline bool BuildInputHeldByChord(TouchInput input,const ControlBindings& bindings) {
+    const auto& build=bindings.actions[BuildMenu];
+    return input!=TI::None&&(input==build.input||
+        (build.command&&(input==bindings.commandGrip||input==bindings.commandClick)));
 }
 inline bool RecenterHeld(const TouchControls& in,const ControlBindings& bindings=ActiveBindings()) {
     return TouchValue(in,bindings.recenterModifier)>.5f&&TouchValue(in,bindings.recenterClick)>.5f;

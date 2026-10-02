@@ -2677,10 +2677,10 @@ static HRESULT WINAPI Hook_Present(
                   BLVR::VideoCapture_GetRecordedFrames());
     }
 
-    // Start video recording only in SIM mode or if BLVR_RECORD is explicitly set
+    // Recording is opt-in, including simulator sessions.
     char recordEnv[16] = {};
     GetEnvironmentVariableA("BLVR_RECORD", recordEnv, sizeof(recordEnv));
-    bool enableRecord = (BLVR::XrHost::Get().IsSimMode() || recordEnv[0] == '1' || _stricmp(recordEnv, "true") == 0);
+    bool enableRecord = recordEnv[0] == '1' || _stricmp(recordEnv, "true") == 0;
     if (enableRecord && !BLVR::VideoCapture_IsStarted() && !BLVR::VideoCapture_IsFinished()) {
         if (BLVR::CameraHook_IsActive() && BLVR::CameraHook_GetUpdateCount() >= 5 &&
             BLVR::CameraHook_GetGameplayRenderCount() >= 10) {

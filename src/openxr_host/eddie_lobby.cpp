@@ -2,6 +2,7 @@
 #include "roadie_room.h"
 #include "../bridge/eddie_dimensions.h"
 #include "../bridge/native_hand_bridge.h"
+#include "../bridge/blvr_ui_bridge.h"
 #include "../input/pose_controls.h"
 #include <windows.h>
 #include <DirectXMath.h>
@@ -137,9 +138,24 @@ template<class T> void read(std::ifstream& stream, T& value) {
 void bytes(std::ifstream& stream, void* p, size_t size) {
     if (!stream.read(static_cast<char*>(p), static_cast<std::streamsize>(size))) throw std::runtime_error("Truncated Eddie cache array");
 }
+bool usablePose(const blvr_xr_bridge::Pose& pose) {
+    float norm=0;
+    for(float value:pose.orientation) {if(!std::isfinite(value))return false;norm+=value*value;}
+    for(float value:pose.position)if(!std::isfinite(value)||std::fabs(value)>10000)return false;
+    return norm>.5f&&norm<1.5f;
+}
 XMMATRIX matrix(const blvr_xr_bridge::Pose& pose) {
-    XMMATRIX m=XMMatrixRotationQuaternion(XMLoadFloat4(reinterpret_cast<const XMFLOAT4*>(pose.orientation)));
+    XMMATRIX m=XMMatrixRotationQuaternion(XMQuaternionNormalize(XMLoadFloat4(reinterpret_cast<const XMFLOAT4*>(pose.orientation))));
     m.r[3]=XMVectorSet(pose.position[0],pose.position[1],pose.position[2],1); return m;
+}
+bool usableMatrix(const float* values) {
+    for(int i=0;i<16;++i)if(!std::isfinite(values[i])||std::fabs(values[i])>20)return false;
+    if(std::fabs(values[3])>.00001f||std::fabs(values[7])>.00001f||std::fabs(values[11])>.00001f||std::fabs(values[15]-1)>.00001f)return false;
+    const XMMATRIX transform=XMLoadFloat4x4(reinterpret_cast<const XMFLOAT4X4*>(values));
+    XMVECTOR scale,rotation,translation;
+    if(!XMMatrixDecompose(&scale,&rotation,&translation,transform))return false;
+    const float determinant=XMVectorGetX(XMMatrixDeterminant(transform));
+    return std::isfinite(determinant)&&std::fabs(determinant)>.00000001f;
 }
 XMVECTOR point(const XMFLOAT4X4& m) { return XMVectorSet(m._41,m._42,m._43,1); }
 float length(XMVECTOR p) { return XMVectorGetX(XMVector3Length(p)); }
@@ -383,9 +399,10 @@ struct EddieLobby::Impl {
     }
     void twoHand(const blvr_xr_bridge::PoseBridge& input,XMMATRIX body,bool authored=false) {
         if(!selected||!tracked[0]||!tracked[1]) {supportHeld=false;return;}
+        const auto unconstrainedPose=posed;
+        const XMFLOAT4X4 unconstrainedWeapons[]{weapons[0],weapons[1]};
         const int primary=selected==1?1:0,secondary=1-primary;
         const auto& bindings=BLVR::ActiveBindings();
-        sourceControlsSignature=BLVR::ControlsSignature(bindings);
         if(BLVR::TouchValue(BLVR::TouchFromPose(input),secondary==0?bindings.supportLeft:bindings.supportRight)<.25f) {supportHeld=false;return;}
         const XMMATRIX weapon=XMLoadFloat4x4(&weapons[primary]);
         const XMVECTOR controller=(matrix(input.controllers[secondary].gripPose)*XMLoadFloat4x4(&nav)).r[3];
@@ -423,13 +440,25 @@ struct EddieLobby::Impl {
         // Reject unreachable secondary grips instead of leaving a floating hand.
         const int secondWrist=bone(secondary==0?"Lf_Wrist":"Rt_Wrist");
         const XMMATRIX actual=palm(secondary)*XMLoadFloat4x4(&bones[secondWrist].inverse)*XMLoadFloat4x4(&posed[secondWrist])*body;
-        if(length(actual.r[3]-secondPalm.r[3])>.10f) supportHeld=false;
+        if(length(actual.r[3]-secondPalm.r[3])>.10f) {
+            // A failed second-hand solve must not leave the primary weapon
+            // rotated or the free hand pinned to an unreachable attachment.
+            supportHeld=false;posed=unconstrainedPose;
+            std::memcpy(weapons,unconstrainedWeapons,sizeof(weapons));return;
+        }
         if(supportHeld&&selected==1)fitGrip(secondary,posed,attached*XMMatrixInverse(nullptr,body),false);
     }
-    void update(const blvr_xr_bridge::PoseBridge& input,float dt,bool openingRoom,uint32_t nativeSolo,bool nativeDriving) {
+    void update(const blvr_xr_bridge::PoseBridge& input,float dt,bool openingRoom,uint32_t nativeSolo,bool nativeDriving,
+        const BLVR::ControlBindings& bindings) {
         opening=openingRoom;
         clock+=dt;
-        if(!(input.flags&blvr_xr_bridge::PoseBridgeHmdValid)) return;
+        if(!(input.flags&blvr_xr_bridge::PoseBridgeHmdValid)||!usablePose(input.hmdPose)) {
+            // Do not republish the preceding pose or retain an interaction
+            // pulse while the exact source head pose is unavailable.
+            sourceInput={};tracked[0]=tracked[1]=false;
+            action=-1;playing=false;actionPulseUntil=pressUntil=0;
+            motionValid=false;supportHeld=false;return;
+        }
         nativeDriving=nativeDriving&&!opening;
         if(nativeDriving!=driving) {
             if(nativeDriving) {weaponBeforeDriving=selected;selected=0;}
@@ -459,15 +488,17 @@ struct EddieLobby::Impl {
         XMMATRIX navigationMatrix=XMMatrixRotationY(yaw)*XMMatrixTranslation(navigation.x,navigation.y,navigation.z);
         XMMATRIX headWorld=matrix(head)*navigationMatrix;
         const auto& right=input.controllers[1];
-        const auto& bindings=BLVR::ActiveBindings();
+        sourceControlsSignature=BLVR::ControlsSignature(bindings);
         const auto touch=BLVR::TouchFromPose(input);
         const bool commandMode=BLVR::CommandHeld(touch,bindings);
-        const bool pause=BLVR::TouchValue(touch,bindings.actions[BLVR::UiStart].input)>.5f||
-            BLVR::TouchValue(touch,bindings.actions[BLVR::Journal].input)>.5f||BLVR::RecenterHeld(touch,bindings);
+        const bool pause=BLVR::ScopedActionDown(touch,BLVR::UiStart,commandMode,bindings)||
+            BLVR::ScopedActionDown(touch,BLVR::Journal,commandMode,bindings)||BLVR::RecenterHeld(touch,bindings);
         const bool earthshaker=!opening&&!driving&&!commandMode&&!nativeSolo&&
             !pause&&BLVR::EarthshakerHeld(touch,bindings);
+        // BuildRadial also needs the guitar as its native UI carrier. Preserve
+        // that attachment policy without interpreting it as timed solo notes.
         const bool soloMode=!driving&&(nativeSolo||touch.hostRadial||(!commandMode&&!pause&&
-            BLVR::TouchValue(touch,bindings.actions[BLVR::RockStance].input)>.5f));
+            BLVR::ScopedActionDown(touch,BLVR::RockStance,commandMode,bindings)));
         if(earthshaker&&!earthshakerDown){action=3;actionStart=clock;physicalPlayback=false;}
         earthshakerDown=earthshaker;
         if(pause||commandMode||driving){action=-1;actionPulseUntil=0;}
@@ -536,7 +567,7 @@ struct EddieLobby::Impl {
         for(size_t i=0;i<bones.size();++i) posed[i]=bones[i].reference;
         for(int hand=0;hand<2;++hand) {
             auto controller=input.controllers[hand];
-            tracked[hand]=(controller.activeFlags&blvr_xr_bridge::ControllerGripPose)!=0;
+            tracked[hand]=(controller.activeFlags&blvr_xr_bridge::ControllerGripPose)!=0&&usablePose(controller.gripPose);
             equipped[hand]=tracked[hand] && selected==(hand==0?2u:1u);
             if(equipped[hand]) controller.squeeze=1;
             if(tracked[hand]) arm(hand,controller,body);
@@ -581,13 +612,13 @@ struct EddieLobby::Impl {
         triggerDown=trigger;
         if(released) contactLatched=false;
         if(pressed && !contactLatched) {pressUntil=clock+.22f;contactLatched=true;}
-        const unsigned noteButtons=((nativeSolo&2u)&&BLVR::TouchValue(touch,bindings.soloFret)<=.5f)?
-            (BLVR::TouchValue(touch,bindings.actions[BLVR::SoloNote1].input)>.5f?1u:0u)|
-            (BLVR::TouchValue(touch,bindings.actions[BLVR::SoloNote2].input)>.5f?2u:0u)|
-            (BLVR::TouchValue(touch,bindings.actions[BLVR::SoloNote3].input)>.5f?4u:0u):0u;
+        const unsigned noteButtons=((nativeSolo&2u)&&!commandMode&&!pause&&BLVR::TouchValue(touch,bindings.soloFret)<=.5f)?
+            (BLVR::ScopedActionDown(touch,BLVR::SoloNote1,commandMode,bindings)?1u:0u)|
+            (BLVR::ScopedActionDown(touch,BLVR::SoloNote2,commandMode,bindings)?2u:0u)|
+            (BLVR::ScopedActionDown(touch,BLVR::SoloNote3,commandMode,bindings)?4u:0u):0u;
         const bool notePressed=(noteButtons&~lastNoteButtons)!=0;
         lastNoteButtons=noteButtons;
-        const bool actionTrigger=BLVR::TouchValue(touch,bindings.actions[selected==2?BLVR::Guitar:BLVR::Axe].input)>.5f&&
+        const bool actionTrigger=BLVR::ScopedActionDown(touch,selected==2?BLVR::Guitar:BLVR::Axe,commandMode,bindings)&&
             !soloMode&&!commandMode&&!driving&&!pause&&!earthshaker;
         if(selected&&((actionTrigger&&!actionDown[1])||notePressed)&&!pressed) {
             action=static_cast<int>(selected);actionStart=clock;
@@ -600,7 +631,7 @@ struct EddieLobby::Impl {
         // Controller motion is measured relative to the head/weapon, so walking
         // and snap turns cannot manufacture a melee strike or a guitar strum.
         XMFLOAT3 axeTip{},strum{},pickingHand{};
-        XMStoreFloat3(&pickingHand,matrix(right.gripPose).r[3]-matrix(head).r[3]);
+        if(tracked[1])XMStoreFloat3(&pickingHand,matrix(right.gripPose).r[3]-matrix(head).r[3]);
         if(selected==1&&tracked[1]) {
             const int wrist=bone("Rt_Wrist");
             const XMMATRIX controllerWeapon=XMLoadFloat4x4(&gripWeapon[1])*XMLoadFloat4x4(&bones[wrist].reference)
@@ -716,10 +747,15 @@ bool EddieLobby::exportRig(blvr_xr_bridge::RigFrame& output) const {
     output={};output.magic=blvr_xr_bridge::RigMagic;
     output.frameId=p.sourceInput.frameId;output.predictedDisplayTime=p.sourceInput.predictedDisplayTime;
     output.boneCount=static_cast<uint32_t>(p.bones.size());
-    output.selectedWeapon=p.selected&&p.tracked[p.selected==1?1:0]?p.selected:0;
+    output.version=blvr_xr_bridge::RigVersion;output.structBytes=sizeof(output);
+    output.trackedHandMask=(p.tracked[0]?1u:0u)|(p.tracked[1]?2u:0u);
+    // Preserve equipment selection on tracking loss. The native renderer owns
+    // the current arm and weapon attachment for each unavailable grip.
+    output.selectedWeapon=p.selected;
     output.controlsSignature=p.sourceControlsSignature;
     output.supportHeld=p.supportHeld?1u:0u;
-    if(p.playing&&!p.physicalPlayback&&!p.opening) {
+    if(p.playing&&!p.physicalPlayback&&!p.opening&&
+       (p.action==3?output.trackedHandMask==3:p.action==2?output.trackedHandMask==3:(output.trackedHandMask&2u))) {
         output.liveAction=static_cast<uint32_t>(p.action);
         const float time=p.clock-p.actionStart,duration=p.action==2?.86f:1.25f;
         output.liveActionWeight=std::clamp((std::min)(time/.10f,(duration-time)/.18f),0.f,1.f);
@@ -789,7 +825,7 @@ bool EddieLobby::readRenderedUi(uint64_t epoch,uint64_t sourceFrame,uint64_t pos
     if(!history) {
         mapping=OpenFileMappingW(FILE_MAP_READ,FALSE,blvr_xr_bridge::NativeHandMappingName);
         if(!mapping)return false;
-        history=static_cast<const blvr_xr_bridge::NativeHandHistoryBuffer*>(MapViewOfFile(mapping,FILE_MAP_READ,0,0,0));
+        history=static_cast<const blvr_xr_bridge::NativeHandHistoryBuffer*>(MapViewOfFile(mapping,FILE_MAP_READ,0,0,sizeof(*history)));
         if(!history){CloseHandle(mapping);mapping=nullptr;return false;}
     }
     const auto& source=history->slots[sourceFrame%blvr_xr_bridge::NativeHandHistory];
@@ -798,47 +834,50 @@ bool EddieLobby::readRenderedUi(uint64_t epoch,uint64_t sourceFrame,uint64_t pos
     MemoryBarrier();std::memcpy(&frame,&source,sizeof(frame));MemoryBarrier();
     if(source.sequence!=sequence||frame.magic!=blvr_xr_bridge::NativeHandMagic
         ||frame.producerEpoch!=epoch||frame.sourceFrameId!=sourceFrame||frame.poseFrameId!=poseFrame
-        ||frame.predictedDisplayTime!=displayTime||frame.validMask!=3)return false;
-    for(const auto& palm:frame.palmToHead)for(float v:palm)if(!std::isfinite(v)||std::fabs(v)>20)return false;
+        ||frame.predictedDisplayTime!=displayTime||frame.validMask!=3
+        ||frame.version!=blvr_xr_bridge::NativeHandVersion||frame.pointerValidMask>3||
+        (frame.flags&~(blvr_xr_bridge::NativeUiDriving|blvr_xr_bridge::NativeUiGuitar))||!usablePose(head))return false;
+    for(const auto& palm:frame.palmToHead)if(!usableMatrix(palm))return false;
     for(const auto& tip:frame.indexTipToHead)for(float v:tip)if(!std::isfinite(v)||std::fabs(v)>20)return false;
     if(frame.flags&blvr_xr_bridge::NativeUiGuitar)
-        for(float v:frame.guitarToHead)if(!std::isfinite(v)||std::fabs(v)>20)return false;
-    output={};
+        if(!usableMatrix(frame.guitarToHead))return false;
+    UiMounts candidate{};
     const XMMATRIX headToLocal=matrix(head);
     const auto save=[&](unsigned mount,XMMATRIX transform) {
         XMVECTOR scale,rotation,translation;
-        if(!XMMatrixDecompose(&scale,&rotation,&translation,transform))return;
-        XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(&output.poses[mount].orientation),XMQuaternionNormalize(rotation));
-        XMStoreFloat3(reinterpret_cast<XMFLOAT3*>(&output.poses[mount].position),translation);
-        output.validMask|=1u<<mount;
+        if(!XMMatrixDecompose(&scale,&rotation,&translation,transform))return false;
+        XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(&candidate.poses[mount].orientation),XMQuaternionNormalize(rotation));
+        XMStoreFloat3(reinterpret_cast<XMFLOAT3*>(&candidate.poses[mount].position),translation);
+        candidate.validMask|=1u<<mount;return true;
     };
     for(int hand=0;hand<2;++hand) {
         const XMMATRIX palm=XMLoadFloat4x4(reinterpret_cast<const XMFLOAT4X4*>(frame.palmToHead[hand]))*headToLocal;
         const XMMATRIX backPlane(XMVectorSet(1,0,0,0),XMVectorSet(0,0,-1,0),
             XMVectorSet(0,1,0,0),XMVectorSet(0,.055f,.16f,1));
-        save(hand==0?LeftForearm:RightForearm,backPlane*palm);
+        if(!save(hand==0?LeftForearm:RightForearm,backPlane*palm))return false;
         if(hand==0) {
             const XMMATRIX palmPlane(XMVectorSet(-1,0,0,0),XMVectorSet(0,0,-1,0),
                 XMVectorSet(0,-1,0,0),XMVectorSet(0,-.10f,-.055f,1));
-            save(AbovePalm,palmPlane*palm);
+            if(!save(AbovePalm,palmPlane*palm))return false;
         }
-        XMStoreFloat3(reinterpret_cast<XMFLOAT3*>(&output.indexTips[hand]),
+        XMStoreFloat3(reinterpret_cast<XMFLOAT3*>(&candidate.indexTips[hand]),
             XMVector3TransformCoord(XMLoadFloat3(reinterpret_cast<const XMFLOAT3*>(frame.indexTipToHead[hand])),headToLocal));
-        output.tipMask|=1u<<hand;
+        candidate.tipMask|=frame.pointerValidMask&(1u<<hand);
     }
     if((frame.flags&blvr_xr_bridge::NativeUiGuitar)&&impl_->guitarHeadstockY>-100) {
         const XMMATRIX screen(XMVectorSet(0,-1,0,0),XMVectorSet(0,0,1,0),
             XMVectorSet(-1,0,0,0),XMVectorSet(0,impl_->guitarHeadstockY-.10f,.24f,1));
-        save(GuitarHeadstock,screen*XMLoadFloat4x4(reinterpret_cast<const XMFLOAT4X4*>(frame.guitarToHead))*headToLocal);
+        if(!save(GuitarHeadstock,screen*XMLoadFloat4x4(reinterpret_cast<const XMFLOAT4X4*>(frame.guitarToHead))*headToLocal))return false;
     }
     driving=(frame.flags&blvr_xr_bridge::NativeUiDriving)!=0;
+    output=candidate;
     return true;
 }
 bool EddieLobby::ready() const {return impl_->loaded;}
 bool EddieLobby::confirming() const {return impl_->clock<impl_->pressUntil;}
 unsigned EddieLobby::selectedWeapon() const {return impl_->selected;}
 unsigned EddieLobby::physicalAction() const {return impl_->clock<impl_->actionPulseUntil?impl_->pulseAction:0u;}
-void EddieLobby::update(const blvr_xr_bridge::PoseBridge& input,float seconds,bool opening,uint32_t nativeSolo,bool driving) {if(ready()) impl_->update(input,std::clamp(seconds,0.f,.05f),opening,nativeSolo,driving);}
+void EddieLobby::update(const blvr_xr_bridge::PoseBridge& input,float seconds,bool opening,uint32_t nativeSolo,bool driving) {if(ready()) impl_->update(input,std::clamp(seconds,0.f,.05f),opening,nativeSolo,driving,BLVR::ActiveBindings());}
 void EddieLobby::render(ID3D11RenderTargetView* target,uint32_t width,uint32_t height,const XrView& view,ID3D11ShaderResourceView* menu) {impl_->render(target,width,height,view,menu);}
 
 bool EddieLobby::initialize(ID3D11Device* device,ID3D11DeviceContext* context,const std::filesystem::path& directory,std::string& failure) {
@@ -1114,6 +1153,16 @@ bool EddieLobby::visualTest(const std::filesystem::path& assets,const std::files
             std::ofstream shot(output/(selected==1?"axe-two-hand.ppm":"guitar-two-hand.ppm"),std::ios::binary);shot<<"P6\n"<<width<<' '<<height<<"\n255\n";
             for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x)shot.write(reinterpret_cast<char*>(mapped.pData)+y*mapped.RowPitch+x*4,3);
             context->Unmap(staging.Get(),0);
+            const auto beforeUnreachablePose=rig.posed;
+            const XMFLOAT4X4 beforeUnreachableWeapons[]{rig.weapons[0],rig.weapons[1]};
+            const auto reachableSupport=rig.supportPoint;
+            rig.supportPoint.y+=4;
+            rig.twoHand(frame,XMLoadFloat4x4(&rig.root));
+            if(rig.supportHeld||std::memcmp(rig.posed.data(),beforeUnreachablePose.data(),sizeof(rig.posed))||
+                std::memcmp(rig.weapons,beforeUnreachableWeapons,sizeof(rig.weapons)))
+                throw std::runtime_error("Unreachable support changed the primary weapon or left a constrained free hand");
+            rig.supportPoint=reachableSupport;lobby.update(frame,1.f/90);
+            if(!rig.supportHeld)throw std::runtime_error("Released unreachable support could not reattach at the real socket");
             frame.controllers[1].trigger=1;lobby.update(frame,1.f/90);lobby.update(frame,1.f/90);
             if(!rig.supportHeld)throw std::runtime_error("Trigger attack detached the support hand");
             frame.controllers[1].trigger=0;
@@ -1188,6 +1237,12 @@ bool EddieLobby::visualTest(const std::filesystem::path& assets,const std::files
             frame.controllers[hand].gripPose.position[1]=frame.hmdPose.position[1]-.45f;
             frame.controllers[hand].gripPose.position[2]=-.38f;
         }
+        buttons.selected=0;buttons.motionValid=false;
+        frame.controllers[1].trigger=0;buttonLobby.update(frame,1.f/90,false);
+        blvr_xr_bridge::RigFrame emptyHandRequest{};
+        if(!buttonLobby.exportRig(emptyHandRequest)||emptyHandRequest.selectedWeapon||emptyHandRequest.trackedHandMask!=3||
+            emptyHandRequest.controlsSignature!=BLVR::ControlsSignature(BLVR::ActiveBindings()))
+            throw std::runtime_error("Empty hands did not publish the current control layout and tracking state");
         for(unsigned weapon=1;weapon<=2;++weapon) {
             buttons.selected=weapon;buttons.action=-1;buttons.actionDown[1]=false;buttons.motionValid=false;
             setGripRotation(0,weapon==2?frettingGrip:uprightGrip);
@@ -1221,7 +1276,96 @@ bool EddieLobby::visualTest(const std::filesystem::path& assets,const std::files
             buttonLobby.update(frame,1.f/90,false);
             if(buttonLobby.selectedWeapon()!=weapon)
                 throw std::runtime_error("Earthshaker grip chord changed weapon selection");
+            const auto validRight=frame.controllers[1];
+            frame.controllers[1].activeFlags=0;frame.controllers[1].gripPose.position[0]=NAN;
+            buttonLobby.update(frame,1.f/90,false);
+            if(!buttonLobby.exportRig(request)||request.trackedHandMask!=1||request.selectedWeapon!=weapon||request.liveAction||
+               request.controlsSignature!=BLVR::ControlsSignature(BLVR::ActiveBindings()))
+                throw std::runtime_error("Lost grip published a tracked bind pose, lost equipment, or retained an action");
+            frame.controllers[1]=validRight;buttonLobby.update(frame,1.f/90,false);
+            if(!buttonLobby.exportRig(request)||request.trackedHandMask!=3||buttonLobby.physicalAction())
+                throw std::runtime_error("Grip reacquisition manufactured a physical attack or retained invalid tracking");
+            std::fill_n(frame.controllers[1].gripPose.orientation,4,0.f);
+            buttonLobby.update(frame,1.f/90,false);
+            if(!buttonLobby.exportRig(request)||request.trackedHandMask!=1)
+                throw std::runtime_error("A flagged but singular controller pose was accepted as tracked");
+            frame.controllers[1]=validRight;
         }
+        const auto validHead=frame.hmdPose;
+        frame.hmdPose.position[0]=NAN;buttonLobby.update(frame,1.f/90,false);
+        UiMounts invalidHeadMounts{};blvr_xr_bridge::RigFrame invalidHeadRequest{};
+        if(buttonLobby.exportRig(invalidHeadRequest)||buttonLobby.exportUiMounts(invalidHeadMounts)||buttonLobby.physicalAction()||buttonLobby.confirming())
+            throw std::runtime_error("Invalid source HMD republished an older rig or retained interaction pulses");
+        frame.hmdPose=validHead;buttonLobby.update(frame,1.f/90,false);
+        // Feed custom layouts directly to the actual host reader. Production
+        // still receives the live layout through EddieLobby::update; fixtures
+        // need no controls.ini writes or reload timing assumptions.
+        auto scoped=BLVR::DefaultBindings;
+        const auto resetScoped=[&](unsigned weapon) {
+            buttons.selected=weapon;buttons.action=-1;buttons.playing=false;buttons.actionPulseUntil=0;
+            buttons.actionDown[1]=false;buttons.motionValid=false;buttons.supportHeld=false;
+            buttons.lastSelectionButtons=buttons.pendingSelection=buttons.lastNoteButtons=0;
+            buttons.lastNativeSolo=0;buttons.earthshakerDown=false;buttons.physicalPlayback=false;
+            for(auto& controller:frame.controllers) {
+                controller.buttons=0;controller.trigger=controller.squeeze=0;
+            }
+        };
+        for(const auto action:{BLVR::UiStart,BLVR::Journal}) {
+            scoped=BLVR::DefaultBindings;scoped.actions[action]={BLVR::TI::X,true};resetScoped(0);
+            frame.controllers[0].buttons=blvr_xr_bridge::ControllerPrimaryClick;
+            buttons.update(frame,1.f/90,false,0,false,scoped);
+            if(BLVR::MapTouch(BLVR::TouchFromPose(frame),scoped).buttons[action])
+                throw std::runtime_error("Ordinary equipment press emitted a command-bound pause action");
+            frame.controllers[0].buttons=0;buttons.update(frame,1.f/90,false,0,false,scoped);
+            blvr_xr_bridge::RigFrame scopedRequest{};
+            if(!buttonLobby.exportRig(scopedRequest)||scopedRequest.selectedWeapon!=1||
+                scopedRequest.controlsSignature!=BLVR::ControlsSignature(scoped))
+                throw std::runtime_error("Command-bound pause swallowed ordinary axe equip or published the wrong layout");
+            resetScoped(0);frame.controllers[0].squeeze=1;
+            frame.controllers[0].buttons=blvr_xr_bridge::ControllerPrimaryClick|blvr_xr_bridge::ControllerThumbstickPressed;
+            buttons.update(frame,1.f/90,false,0,false,scoped);
+            if(buttons.selected||buttons.action>=0||!BLVR::MapTouch(BLVR::TouchFromPose(frame),scoped).buttons[action])
+                throw std::runtime_error("Command-bound host pause disagreed with native scope");
+        }
+        for(unsigned weapon=1;weapon<=2;++weapon) {
+            scoped=BLVR::DefaultBindings;const auto action=weapon==1?BLVR::Axe:BLVR::Guitar;
+            scoped.actions[action].command=true;resetScoped(weapon);frame.controllers[1].trigger=1;
+            buttons.update(frame,1.f/90,false,0,false,scoped);
+            if(buttons.action>=0||BLVR::MapTouch(BLVR::TouchFromPose(frame),scoped).buttons[action])
+                throw std::runtime_error("Host button attack leaked without its remapped command modifier");
+            scoped.actions[action]={BLVR::TI::LeftTrigger};resetScoped(weapon);frame.controllers[0].trigger=1;
+            buttons.update(frame,1.f/90,false,0,false,scoped);
+            if(buttons.action!=static_cast<int>(weapon))
+                throw std::runtime_error("Host button attack ignored its ordinary remapped trigger");
+            scoped.actions[action].input=BLVR::TI::None;resetScoped(weapon);frame.controllers[1].trigger=1;
+            buttons.update(frame,1.f/90,false,0,false,scoped);
+            if(buttons.action>=0)throw std::runtime_error("Unbound host button attack retained a hidden trigger");
+        }
+        for(unsigned n=0;n<3;++n) {
+            scoped=BLVR::DefaultBindings;const auto action=static_cast<BLVR::NativeAction>(BLVR::SoloNote1+n);
+            scoped.actions[action]={BLVR::TI::RightTrigger,true};resetScoped(2);frame.controllers[1].trigger=1;
+            buttons.update(frame,1.f/90,false,2,false,scoped);
+            auto nativeTouch=BLVR::TouchFromPose(frame);nativeTouch.soloNotes=true;
+            if(buttons.action>=0||BLVR::MapTouch(nativeTouch,scoped).buttons[action])
+                throw std::runtime_error("Timed-note animation leaked without its required command modifier");
+            scoped.actions[action].command=false;resetScoped(2);frame.controllers[1].trigger=1;
+            buttons.update(frame,1.f/90,false,2,false,scoped);
+            if(buttons.action!=2)throw std::runtime_error("Timed-note animation ignored a remapped native note button");
+            resetScoped(2);frame.controllers[1].trigger=1;frame.controllers[0].squeeze=1;
+            frame.controllers[0].buttons=blvr_xr_bridge::ControllerThumbstickPressed;
+            buttons.update(frame,1.f/90,false,2,false,scoped);
+            if(buttons.action>=0)throw std::runtime_error("Command mode manufactured a timed-note animation");
+        }
+        scoped=BLVR::DefaultBindings;scoped.actions[BLVR::UiStart].input=scoped.actions[BLVR::Journal].input=BLVR::TI::None;
+        resetScoped(1);frame.controllers[0].buttons=blvr_xr_bridge::ControllerMenuClick;frame.controllers[1].trigger=1;
+        buttons.update(frame,1.f/90,false,0,false,scoped);
+        if(buttons.action!=1)throw std::runtime_error("Unbound host pause retained a hidden menu button");
+        scoped=BLVR::DefaultBindings;resetScoped(1);frame.controllers[1].trigger=1;
+        buttons.update(frame,1.f/90,false,blvr_ui_bridge::BuildRadial,false,scoped);
+        blvr_xr_bridge::RigFrame buildCarrier{};
+        if(!buttonLobby.exportRig(buildCarrier)||buildCarrier.selectedWeapon!=2||buildCarrier.liveAction||
+            buttonLobby.physicalAction()||buttons.lastNoteButtons)
+            throw std::runtime_error("Build wheel lost its guitar carrier or manufactured a combat/solo note");
         // Exact rendered-geometry UI joins, including on-foot versus mounted
         // identity and a changing rendered hand with unchanged host tracking.
         HANDLE uiMapping=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,
@@ -1236,6 +1380,7 @@ bool EddieLobby::visualTest(const std::filesystem::path& assets,const std::files
         uiFrame.sequence=2;uiFrame.magic=blvr_xr_bridge::NativeHandMagic;
         uiFrame.producerEpoch=7;uiFrame.sourceFrameId=65;uiFrame.poseFrameId=8;
         uiFrame.predictedDisplayTime=900;uiFrame.validMask=3;uiFrame.flags=blvr_xr_bridge::NativeUiGuitar;
+        uiFrame.version=blvr_xr_bridge::NativeHandVersion;uiFrame.pointerValidMask=3;
         for(int hand=0;hand<2;++hand) {
             uiFrame.palmToHead[hand][0]=uiFrame.palmToHead[hand][5]=uiFrame.palmToHead[hand][10]=uiFrame.palmToHead[hand][15]=1;
             uiFrame.palmToHead[hand][12]=hand==0?-.3f:.3f;uiFrame.palmToHead[hand][13]=-.4f;
@@ -1251,10 +1396,26 @@ bool EddieLobby::visualTest(const std::filesystem::path& assets,const std::files
         if(lobby.readRenderedUi(7,66,8,900,uiHead,joined,mounted)||lobby.readRenderedUi(7,65,9,900,uiHead,joined,mounted)||
            lobby.readRenderedUi(6,65,8,900,uiHead,joined,mounted)||lobby.readRenderedUi(7,65,8,901,uiHead,joined,mounted))
             throw std::runtime_error("Rendered UI accepted a mismatched source generation");
-        uiFrame.flags=blvr_xr_bridge::NativeUiDriving;uiFrame.sequence=6;
+        uiFrame.pointerValidMask=1;uiFrame.sequence+=2;
+        if(!lobby.readRenderedUi(7,65,8,900,uiHead,joined,mounted)||joined.tipMask!=1||
+            (joined.validMask&((1u<<LeftForearm)|(1u<<RightForearm)))!=((1u<<LeftForearm)|(1u<<RightForearm)))
+            throw std::runtime_error("Native fallback geometry lost UI attachment or enabled an untracked pointer");
+        const UiMounts beforeMalformed=joined;
+        const auto rejectMalformed=[&] {
+            uiFrame.sequence+=2;
+            if(lobby.readRenderedUi(7,65,8,900,uiHead,joined,mounted)||std::memcmp(&joined,&beforeMalformed,sizeof(joined)))
+                throw std::runtime_error("Malformed rendered UI was accepted or partially changed output");
+        };
+        uiFrame.version=2;rejectMalformed();uiFrame.version=blvr_xr_bridge::NativeHandVersion;
+        uiFrame.pointerValidMask=4;rejectMalformed();uiFrame.pointerValidMask=1;
+        uiFrame.palmToHead[1][0]=0;rejectMalformed();uiFrame.palmToHead[1][0]=1;
+        uiFrame.palmToHead[1][3]=.2f;rejectMalformed();uiFrame.palmToHead[1][3]=0;
+        uiFrame.guitarToHead[10]=0;rejectMalformed();uiFrame.guitarToHead[10]=1;
+        uiFrame.indexTipToHead[0][0]=NAN;rejectMalformed();uiFrame.indexTipToHead[0][0]=0;
+        uiFrame.flags=blvr_xr_bridge::NativeUiDriving;uiFrame.sequence+=2;
         if(!lobby.readRenderedUi(7,65,8,900,uiHead,joined,mounted)||!mounted||(joined.validMask&(1u<<GuitarHeadstock)))
             throw std::runtime_error("Mounted rendered UI fixture failed");
-        uiFrame.validMask=1;uiFrame.sequence=8;
+        uiFrame.validMask=1;uiFrame.sequence+=2;
         if(lobby.readRenderedUi(7,65,8,900,uiHead,joined,mounted))throw std::runtime_error("Rendered UI accepted a missing hand");
         UnmapViewOfFile(uiHistory);CloseHandle(uiMapping);
         failure.clear();return true;

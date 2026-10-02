@@ -1,11 +1,11 @@
 """Select/play the owned Relic Raiser through the simulator's XR controllers.
 
-Reads the published solved rig and native solo clock. Does not write game state.
+Targets actual native-rendered fingertip/guitar geometry and reads the native
+solo clock. Does not write game state.
 """
 import argparse
 import math
 import json
-import mmap
 import struct
 import time
 from pathlib import Path
@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 from blvr_bot import Bot
 import run_blvr_elliott_proof as sim
+from rig_bridge import read_current_rig, read_rendered_ui_pair, RIG_SKIN_OFFSET, RIG_WEAPON_OFFSET
 
 # OpenXR grip points down the grasped tube, not along an aiming ray. The
 # simulator has yaw/pitch but no controller roll: these poses put the neck
@@ -21,23 +22,12 @@ GUITAR_GRIP=dict(yaw=-math.pi/2,pitch=math.pi)
 PICKING_GRIP=dict(yaw=0,pitch=math.pi/2)
 
 
-def rig():
-    with mmap.mmap(-1,384,tagname=r'Local\BLVR_XR_PoseBridge_v1',access=mmap.ACCESS_READ) as poses:
-        for _ in range(20):
-            pose=poses[:];sequence=struct.unpack_from('<I',pose,16)[0]
-            if not sequence&1 and struct.unpack_from('<I',poses,16)[0]==sequence:break
-        else:raise RuntimeError('No coherent pose producer')
-        producer_epoch,latest=struct.unpack_from('<QQ',pose,24)
-    with mmap.mmap(-1,16560*64,tagname=r'Local\BLVR_TrackedEddie_v1',access=mmap.ACCESS_READ) as view:
-        candidates=[]
-        for i in range(64):
-            data=view[i*16560:(i+1)*16560]
-            seq,magic,epoch,frame=struct.unpack_from('<IIQQ',data)
-            if magic==0x47495242 and epoch==producer_epoch and frame<=latest and not seq&1 and struct.unpack_from('<I',view,i*16560)[0]==seq:
-                candidates.append((frame,data))
-    if not candidates: raise RuntimeError('No coherent tracked rig')
-    frame,data=max(candidates)
-    return frame,data
+def rig(bot=None):
+    if bot is not None:
+        bot.world.live()
+    publication=read_current_rig(required_hands=3,
+        expected_pid=bot.world.receipt.get('host_pid') if bot is not None else None)
+    return publication['frame'],publication['data']
 
 
 def native_solo(bot):
@@ -81,6 +71,32 @@ def fingertip_reference():
     return index,tip[3]+(tip[3]-previous[3])*.72
 
 
+def guitar_headstock_y():
+    """Use the same owned mesh extent as EddieLobby, without a pose guess."""
+    with (sim.ROOT/'artifacts/eddie-rig/eddie.rigcache').open('rb') as stream:
+        header=stream.read(16)
+        if len(header)!=16 or header[:8]!=b'BLVRIG02':raise RuntimeError('Imported rig cache changed')
+        bones,meshes=struct.unpack_from('<2I',header,8)
+        if not 0<bones<=256 or meshes>200:raise RuntimeError('Invalid imported rig counts')
+        stream.seek(bones*132,1);highest=-math.inf
+        for _ in range(meshes):
+            header=stream.read(156)
+            if len(header)!=156:raise RuntimeError('Truncated imported mesh')
+            group,vertices,indices=struct.unpack_from('<3I',header)
+            if group>2 or vertices>100000 or indices>500000 or indices%3:
+                raise RuntimeError('Invalid imported mesh counts')
+            if group==2:
+                data=stream.read(vertices*64)
+                if len(data)!=vertices*64:raise RuntimeError('Truncated imported guitar')
+                positions=np.frombuffer(data,dtype='<f4').reshape(vertices,16)[:,:3]
+                if not np.isfinite(positions).all():raise RuntimeError('Invalid imported guitar geometry')
+                if vertices:highest=max(highest,float(positions[:,1].max()))
+            else:stream.seek(vertices*64,1)
+            stream.seek(indices*4,1)
+        if not math.isfinite(highest) or highest<=-100:raise RuntimeError('Imported guitar headstock is unavailable')
+        return highest
+
+
 def poke(bot):
     # The deterministic fixture holds the guitar across the torso, brings its
     # neck within the opposite hand's reach, and leaves the right trigger idle.
@@ -88,30 +104,33 @@ def poke(bot):
         existing=native_solo(bot)()
         if existing['radial'] or existing['notes']: bot.press('b');time.sleep(.3)
     except RuntimeError: pass
-    sim.send_head_pose(yaw=0,pitch=0)
+    sim.send_head_pose(y=1.7,yaw=0,pitch=0)
     bot.command(0,neutral=True,posX=.12,posY=-.48,posZ=-.28,**GUITAR_GRIP,lease_ms=500)
     bot.command(1,neutral=True,posX=.2,posY=-.3,posZ=-.4,**PICKING_GRIP,lease_ms=500)
     time.sleep(.4)
     bot.press('solo');time.sleep(.4)
     read=native_solo(bot)
     if not read()['radial']: raise RuntimeError('Native solo wheel did not open')
-    index,reference=fingertip_reference()
+    headstock_y=guitar_headstock_y()
     grip=np.array([.2,-.3,-.4])
     # Upper-left wedge in source UV, then the exact attached surface crop.
     u=.494-.236*.35;v=.417-.278*.60621778
-    width=.62;height=.62*(.73*720)/(.54*1280)
-    local=np.array([((u-.23)/.54-.5)*width,(.5-(v-.10)/.73)*height,.12,1.])
+    width=.62
     for depth in (.12,.01):
-        local[2]=depth
         for attempt in range(18):
-            frame,data=rig()
-            guitar=np.array(struct.unpack_from('<16f',data,48+16384+64)).reshape(4,4)
-            plane=np.array([[0,-1,0,0],[0,0,1,0],[-1,0,0,0],[0,.84189453,.24,1.]])@guitar
-            # UI quad extents are meters; its mount discards skeleton scale.
-            plane[:3,:3]/=np.linalg.norm(plane[:3,:3],axis=1)[:,None]
-            tip=reference@np.array(struct.unpack_from('<16f',data,48+index*64)).reshape(4,4)
-            target=local@plane;error=target[:3]-tip[:3]
-            bot.event('finger-target',frame=frame,depth=depth,error=float(np.linalg.norm(error)),tip=tip[:3].tolist(),target=target[:3].tolist())
+            bot.world.live()
+            publication=read_rendered_ui_pair(headstock_y,bot.receipt['game_pid'],bot.receipt['host_pid'])
+            bot.world.live()
+            height=.62*(.73*publication['ui_height'])/(.54*publication['ui_width'])
+            local=np.array([((u-.23)/.54-.5)*width,(.5-(v-.10)/.73)*height,depth,1.])
+            eye=publication['eyes'][0]
+            plane=np.array(eye['screen']).reshape(4,4)
+            tip=np.array(eye['right_tip'])
+            target=local@plane;error=target[:3]-tip
+            bot.event('finger-target',transaction=publication['transaction'],source=eye['source_frame'],
+                frame=eye['pose_frame'],display_time=eye['display_time'],depth=depth,
+                geometry='exact native rendered pair',error=float(np.linalg.norm(error)),
+                tip=tip.tolist(),target=target[:3].tolist())
             if np.linalg.norm(error)<.008: break
             grip+=np.clip(error,-.09,.09)*.8
             if np.linalg.norm(grip)>1.3: raise RuntimeError('Finger target exceeds controller reach fixture')

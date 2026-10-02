@@ -41,10 +41,12 @@ public:
            current.producerEpoch!=epoch||current.tickMs>now||now-current.tickMs>1000||!current.active)
             return nullptr;
         current.title[sizeof(current.title)-1]=0;current.body[sizeof(current.body)-1]=0;
-        if(view_&&std::strcmp(last_.title,current.title)==0&&std::strcmp(last_.body,current.body)==0)
+        const auto bindings=BLVR::ActiveBindings();
+        const auto signature=BLVR::ControlsSignature(bindings);
+        if(view_&&signature==controlsSignature_&&std::strcmp(last_.title,current.title)==0&&std::strcmp(last_.body,current.body)==0)
             return view_.Get();
         if(!loadArtwork()) return nullptr; // The live native card remains usable.
-        if(!rasterize(current.title,current.body)) return nullptr;
+        if(!rasterize(current.title,current.body,bindings)) return nullptr;
         if(!texture_) {
             D3D11_TEXTURE2D_DESC desc{};
             desc.Width=width_;desc.Height=height_;desc.MipLevels=desc.ArraySize=1;
@@ -56,7 +58,7 @@ public:
             }
         }
         context->UpdateSubresource(texture_.Get(),0,nullptr,pixels_.data(),width_*4,0);
-        last_=current;
+        last_=current;controlsSignature_=signature;
         return view_.Get();
     }
     uint32_t width() const {return width_;}
@@ -98,7 +100,7 @@ private:
         if(!result.empty()) result.pop_back();
         return result;
     }
-    bool rasterize(const char* title,const char* body) {
+    bool rasterize(const char* title,const char* body,const BLVR::ControlBindings& bindings) {
         HDC dc=CreateCompatibleDC(nullptr);if(!dc) return false;
         BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
         info.bmiHeader.biWidth=static_cast<LONG>(width_);info.bmiHeader.biHeight=-static_cast<LONG>(height_);
@@ -129,8 +131,8 @@ private:
         draw(wide(body),rect(.105f,.34f,.895f,.70f),int(height_*.049f),false);
         SetTextColor(dc,RGB(192,185,172));
         const bool commands=std::strstr(body,"command +")!=nullptr;
-        const std::string footer=(commands?"COMMAND: hold "+BLVR::CommandChordLabel()+"\n":"")+
-            BLVR::ActionLabel(BLVR::Cancel)+"  Continue";
+        const std::string footer=(commands?"COMMAND: hold "+BLVR::CommandChordLabel(bindings)+"\n":"")+
+            BLVR::ActionLabel(BLVR::Cancel,bindings)+"  Continue";
         draw(wide(footer.c_str()),
              rect(.105f,.715f,.895f,.80f),int(height_*.033f),true);
         GdiFlush();pixels_.assign(static_cast<uint8_t*>(bits),static_cast<uint8_t*>(bits)+art_.size());
@@ -143,6 +145,7 @@ private:
     HANDLE mapping_=nullptr;
     const blvr_prompt_bridge::Snapshot* shared_=nullptr;
     blvr_prompt_bridge::Snapshot last_{};
+    uint64_t controlsSignature_=0;
     bool attempted_=false;
     UINT width_=0,height_=0;
     std::vector<uint8_t> art_,pixels_;

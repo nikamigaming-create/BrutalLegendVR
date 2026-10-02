@@ -41,7 +41,8 @@ bool Extra(ControlBindings& b,const std::string& name,const std::string& value) 
         {"recenter_modifier",&ControlBindings::recenterModifier},{"recenter_click",&ControlBindings::recenterClick},
         {"support_left",&ControlBindings::supportLeft},{"support_right",&ControlBindings::supportRight},
         {"solo_fret",&ControlBindings::soloFret},{"solo_accept_alternate",&ControlBindings::soloAcceptAlternate},
-        {"opening_confirm_alternate",&ControlBindings::openingConfirmAlternate}};
+        {"opening_confirm_alternate",&ControlBindings::openingConfirmAlternate},
+        {"build_research_alternate",&ControlBindings::buildResearchAlternate}};
     for(const auto& key:keys)if(name==key.name)return Input(value,b.*key.member);
     struct StickKey {const char* name;TouchStick ControlBindings::*member;};
     const StickKey sticks[]={{"movement_stick",&ControlBindings::movementStick},{"turn_stick",&ControlBindings::turnStick},
@@ -124,7 +125,7 @@ uint64_t ControlsSignature(const ControlBindings& b) {
     for(const auto& a:b.actions){add(unsigned(a.input));add(a.command?1u:0u);}
     for(auto key:{b.commandGrip,b.commandClick,b.equipAxe,b.equipGuitar,b.earthshakerLeft,b.earthshakerRight,
         b.wheelGrip,b.commandBoost,b.recenterModifier,b.recenterClick,b.supportLeft,b.supportRight,b.soloFret,
-        b.soloAcceptAlternate,b.openingConfirmAlternate})add(unsigned(key));
+        b.soloAcceptAlternate,b.openingConfirmAlternate,b.buildResearchAlternate})add(unsigned(key));
     for(auto stick:{b.movementStick,b.turnStick,b.radialStick,b.openingMenuStick})add(unsigned(stick));
     return hash;
 }
