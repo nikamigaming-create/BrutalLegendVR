@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version='0.1.0-preview.3',
+    [string]$Version='0.1.0-preview.4',
     [string]$Python='python',
     [string]$DxvkDll,
     [switch]$SkipSetupBuild,

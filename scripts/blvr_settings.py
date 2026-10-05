@@ -58,7 +58,8 @@ def validate_runtime(path):
 
 
 def runtimes():
-    candidates = []
+    candidates = [str(Path(os.environ.get('ProgramFiles', 'C:/Program Files')) /
+                      'Oculus/Support/oculus-runtime/oculus_openxr_64.json')]
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Khronos\OpenXR\1',
@@ -66,8 +67,6 @@ def runtimes():
             candidates.append(winreg.QueryValueEx(handle, 'ActiveRuntime')[0])
     except (ImportError, OSError):
         pass
-    candidates.append(str(Path(os.environ.get('ProgramFiles', 'C:/Program Files')) /
-                          'Oculus/Support/oculus-runtime/oculus_openxr_64.json'))
     found = []
     for candidate in candidates:
         if candidate and candidate not in found and Path(candidate).is_file():

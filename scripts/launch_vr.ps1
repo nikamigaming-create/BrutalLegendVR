@@ -23,11 +23,11 @@ $gameExe=Join-Path $GameDir 'BrutalLegend.exe'
 if ((Get-FileHash -LiteralPath $gameExe -Algorithm SHA256).Hash -ne '872DC676E8FD77AD3351DD9DFCC99E89353AAE0ED9857272A65FD47F298FB0B1') { throw 'Unsupported game executable. This preview supports the tested Steam PC build.' }
 if (-not $RuntimeJson -and $settings -and $settings.runtime_json) { $RuntimeJson=$settings.runtime_json }
 if (-not $RuntimeJson) {
-    $active=(Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Khronos\OpenXR\1' -Name ActiveRuntime -ErrorAction SilentlyContinue).ActiveRuntime
-    if ($active -and $active -notmatch 'simulator|elliott') { $RuntimeJson=$active }
+    $meta=Join-Path $env:ProgramFiles 'Oculus\Support\oculus-runtime\oculus_openxr_64.json'
+    if (Test-Path -LiteralPath $meta -PathType Leaf) { $RuntimeJson=$meta }
     else {
-        $meta=Join-Path $env:ProgramFiles 'Oculus\Support\oculus-runtime\oculus_openxr_64.json'
-        if (Test-Path -LiteralPath $meta) { $RuntimeJson=$meta }
+        $active=(Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Khronos\OpenXR\1' -Name ActiveRuntime -ErrorAction SilentlyContinue).ActiveRuntime
+        if ($active -and $active -notmatch 'simulator|elliott') { $RuntimeJson=$active }
     }
 }
 if ($RuntimeJson) {
@@ -81,7 +81,6 @@ $ready=$false
 $startupLog=''
 for ($i=0; $i -lt 480; $i++) {
     Start-Sleep -Milliseconds 250
-    if ($hostProcess.HasExited) { throw "OpenXR startup failed. See $logFile" }
     if (Test-Path -LiteralPath $logFile) {
         $startupLog+=Read-BlvrStartupLog $logFile ([ref]$logOffset)
         if ($startupLog.Length -gt 262144) { $startupLog=$startupLog.Substring($startupLog.Length-262144) }
@@ -89,8 +88,13 @@ for ($i=0; $i -lt 480; $i++) {
             Stop-Process -Id $hostProcess.Id -ErrorAction SilentlyContinue
             throw "VR rig could not load. Open Setup VR.cmd to prepare your model and check $logFile."
         }
-        if ($startupLog -match 'PoseBridge: READY') { $ready=$true; break }
     }
+    if ($hostProcess.HasExited) {
+        $fatal=[regex]::Matches($startupLog,'(?m)^.*FATAL:\s*(.+)$')
+        $reason=if ($fatal.Count) { $fatal[$fatal.Count-1].Groups[1].Value.Trim() } else { 'The VR host exited before tracking was ready.' }
+        throw "OpenXR startup failed: $reason See $logFile"
+    }
+    if ($startupLog -match 'PoseBridge: READY') { $ready=$true; break }
 }
 if (-not $ready) { Stop-Process -Id $hostProcess.Id -ErrorAction SilentlyContinue; throw 'OpenXR host did not become ready. Check the headset connection and host log.' }
 try { $game=Start-Process -FilePath $gameExe -WorkingDirectory $GameDir -PassThru }

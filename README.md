@@ -4,18 +4,19 @@ A Windows OpenXR mod by Nikami for the Steam PC version of Brütal Legend.
 First-person stereo gameplay, tracked Eddie hands and equipment, physical axe
 swings and guitar strokes, forearm menus, and guitar-mounted solo UI.
 
-**[Download 0.1.0-preview.3](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.3), an experimental testing release.** It adds a Windows installer,
-saved VR settings, a chest-mounted Touch-controller guitar and stronger
-launcher and uninstall recovery. The release includes both-eye simulator
-recordings of guitar sliding, finger input and body placement, plus native
-Ironheade AI Practice recruitment, stage progression, orders and flight.
+**[Download 0.1.0-preview.4](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.4), an experimental testing release.** This launcher patch fixes the
+OpenXR version mismatch between preflight and gameplay. Automatic runtime
+selection now prefers Meta Quest Link / Air Link when installed; an explicitly
+selected runtime still takes precedence. The installer, saved VR settings and
+chest-mounted Touch guitar from preview 3 are included. Its guitar and RTS
+simulator recordings remain available in the [preview 3 release](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.3).
 Physical headset acceptance, complete battles, all lighting/shader effects,
 other factions, online play and the full campaign remain unverified. See the
-[release validation notes](docs/RELEASE_0.1.0-preview.3.md).
+[release validation notes](docs/RELEASE_0.1.0-preview.4.md).
 
 ## Install and play
 
-Use **BrutalLegendVR-0.1.0-preview.3-Setup.exe** for a per-user installation
+Use **BrutalLegendVR-0.1.0-preview.4-Setup.exe** for a per-user installation
 with Start menu shortcuts and an integrated Play, settings and controls app.
 The portable ZIP includes the same runtime and its dependencies; Python is
 not required to play.
@@ -110,7 +111,7 @@ panels appear only when their rendered geometry matches both submitted eyes;
 they are withheld while that matching data is unavailable.
 
 See [complete controls](docs/VR_CONTROLS.md) and
-[preview validation and known issues](docs/RELEASE_0.1.0-preview.3.md).
+[preview validation and known issues](docs/RELEASE_0.1.0-preview.4.md).
 
 ![Default Touch controls](assets/ui/default-controls.png)
 
@@ -129,8 +130,9 @@ For a preflight without launching the game:
 ```
 
 Select another installed 64-bit OpenXR runtime for a launch with
-`-RuntimeJson "C:\path\to\runtime.json"`. The launcher uses the registered
-system runtime, with a Meta runtime fallback when a simulator is registered.
+`-RuntimeJson "C:\path\to\runtime.json"`. Automatic selection prefers the
+installed Meta Quest Link / Air Link runtime, then the registered headset
+runtime. A saved runtime selection overrides that automatic choice.
 Other controller profiles are not yet verified.
 
 If wrist or guitar panels disappear, check tracking and the host log for

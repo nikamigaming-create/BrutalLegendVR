@@ -492,7 +492,8 @@ def gui(root, controls_only=False, settings_only=False, launch=False):
         if selected_runtime:
             runtime_var.set(selected_runtime)
     ttk.Button(runtime_line, text='Browse…', command=browse_runtime).pack(side='right', padx=(8, 0))
-    ttk.Label(settings_tab, text='Leave blank to use your headset runtime automatically. This changes BLVR only.', wraplength=900).pack(anchor='w', pady=(0, 12))
+    ttk.Label(settings_tab, text='Automatic prefers Meta Quest Link / Air Link when installed. Choose another runtime to override it.\n'
+              'This setting applies to BLVR.', wraplength=900).pack(anchor='w', pady=(0, 12))
     for key, label, choices in [
         ('render_resolution', 'Pixels per eye', [1024, 1280, 1536, 1792, 2048]),
         ('frame_limit_fps', 'Game frame limit', [72, 80, 90, 120, 144]),

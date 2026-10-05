@@ -21,7 +21,8 @@ ROOT_FILES = {'Play VR.cmd', 'Setup VR.cmd', 'Remap Controls.cmd', 'Uninstall VR
 SCRIPTS = {'scripts/launch_vr.ps1', 'scripts/deploy.ps1', 'scripts/uninstall.ps1',
            'scripts/common.ps1'}
 DOCS = {'docs/VR_CONTROLS.md', 'docs/PLAY_VR.md', 'docs/QUEST_HINTS_2026-09-28.md',
-        'docs/RELEASE_0.1.0-preview.1.md', 'docs/RELEASE_0.1.0-preview.2.md'}
+        'docs/RELEASE_0.1.0-preview.1.md', 'docs/RELEASE_0.1.0-preview.2.md',
+        'docs/RELEASE_0.1.0-preview.3.md'}
 LICENSES = {'licenses/' + name for name in (
     'MinHook.txt', 'OpenXR.txt', 'JsonCpp.txt', 'DXVK.txt', 'Python.txt', 'Pillow.txt',
     'OpenSSL.txt', 'defusedxml.txt', 'PyInstaller.txt', 'Tcl-Tk.txt', 'PyYAML.txt',

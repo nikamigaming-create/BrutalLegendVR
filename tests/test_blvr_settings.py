@@ -1,9 +1,11 @@
 """Saved launch preferences and runtime validation failure/recovery."""
 import importlib.util
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import struct
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +13,23 @@ SPEC = importlib.util.spec_from_file_location('blvr_settings', Path(__file__).re
 settings = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(settings)
 
 class SettingsTest(unittest.TestCase):
+    def test_meta_runtime_is_first_and_registry_fallback_is_preserved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            meta=root/'Oculus/Support/oculus-runtime/oculus_openxr_64.json'
+            meta.parent.mkdir(parents=True);meta.write_text('{}')
+            steam=root/'steamxr_win64.json';steam.write_text('{}')
+            registered=str(steam)
+            registry=SimpleNamespace(HKEY_LOCAL_MACHINE=0,KEY_READ=1,KEY_WOW64_64KEY=2,
+                OpenKey=lambda *args: nullcontext(object()),
+                QueryValueEx=lambda *args: (registered,1))
+            with patch.dict('sys.modules',{'winreg':registry}), patch.dict(settings.os.environ,{'ProgramFiles':str(root)}):
+                self.assertEqual(settings.runtimes(),[str(meta),str(steam)])
+                registered=str(meta)
+                self.assertEqual(settings.runtimes(),[str(meta)])
+                registered=str(steam);meta.unlink()
+                self.assertEqual(settings.runtimes(),[str(steam)])
+
     def test_repair_stale_settings_and_preserve_game_and_unknown_preferences(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)

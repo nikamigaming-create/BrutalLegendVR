@@ -56,6 +56,9 @@ using Microsoft::WRL::ComPtr;
 constexpr XrDuration SwapchainWaitTimeout = 2'000'000'000;
 constexpr uint32_t SwapchainWaitAttempts = 3u;
 constexpr uint32_t EyeCount = 2;
+// The host uses OpenXR 1.0 plus XR_KHR_D3D11_enable. Request the application's
+// requirement, not the version of the headers used to compile the loader.
+constexpr XrVersion ApplicationApiVersion = XR_MAKE_VERSION(1, 0, 0);
 std::filesystem::path eddieAssets()
 {
     wchar_t file[32768]{};
@@ -854,7 +857,7 @@ private:
         createInfo.applicationInfo.applicationVersion = 1;
         strcpy_s(createInfo.applicationInfo.engineName, "BLVR-dxvk-vr");
         createInfo.applicationInfo.engineVersion = 1;
-        createInfo.applicationInfo.apiVersion = XR_CURRENT_API_VERSION;
+        createInfo.applicationInfo.apiVersion = ApplicationApiVersion;
         createInfo.enabledExtensionCount = 1;
         createInfo.enabledExtensionNames = enabledExtensions;
 
@@ -866,7 +869,7 @@ private:
         std::ostringstream message;
         message << "XRHost: runtime=" << properties.runtimeName
                 << " version=" << xrVersionString(properties.runtimeVersion)
-                << " api=" << xrVersionString(XR_CURRENT_API_VERSION);
+                << " api=" << xrVersionString(ApplicationApiVersion);
         logger_.write(message.str());
     }
 
@@ -3263,7 +3266,7 @@ int main(int argc, char** argv)
         if(hasArgument(argc,argv,"--check-runtime")) {
             XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
             strcpy_s(info.applicationInfo.applicationName,"Brutal Legend VR preflight");
-            info.applicationInfo.apiVersion=XR_MAKE_VERSION(1,0,0);
+            info.applicationInfo.apiVersion=ApplicationApiVersion;
             const char* extension=XR_KHR_D3D11_ENABLE_EXTENSION_NAME;
             info.enabledExtensionCount=1;info.enabledExtensionNames=&extension;
             XrInstance instance=XR_NULL_HANDLE;

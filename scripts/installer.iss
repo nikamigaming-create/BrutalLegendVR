@@ -2,7 +2,7 @@
   #error SourceDir must point to an audited runtime stage.
 #endif
 #ifndef ReleaseVersion
-  #define ReleaseVersion "0.1.0-preview.3"
+  #define ReleaseVersion "0.1.0-preview.4"
 #endif
 [Setup]
 AppId={{C096980B-6910-4A02-B262-EE0D0A71AF1E}
@@ -32,7 +32,7 @@ RestartApplications=no
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 UninstallDisplayName=Brütal Legend VR
-VersionInfoVersion=0.1.0.3
+VersionInfoVersion=0.1.0.4
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 [Files]

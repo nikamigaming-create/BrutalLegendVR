@@ -49,12 +49,13 @@ game. Run this from the release folder for a preflight without launching:
 .\scripts\launch_vr.ps1 -CheckOnly
 ```
 
-The launcher uses the registered system OpenXR runtime, with a Meta fallback
-when a development simulator is registered. An explicit runtime can be selected
-with `-RuntimeJson "C:\path\to\runtime.json"`.
+The automatic launcher choice prefers the installed Meta Quest Link / Air Link
+OpenXR runtime. When Meta is absent, it uses the registered headset runtime.
+Choose a runtime in VR settings or use `-RuntimeJson "C:\path\to\runtime.json"`
+to override that choice for BLVR.
 
 This is a preview. Local Ironheade AI Practice recruitment, stage progression,
 orders and flight have simulator evidence. Physical headset comfort, the
 opening mountain ride, precise particle attachment and a complete RTS battle
 still need player verification.
-See [release validation and limitations](RELEASE_0.1.0-preview.3.md).
+See [release validation and limitations](RELEASE_0.1.0-preview.4.md).
