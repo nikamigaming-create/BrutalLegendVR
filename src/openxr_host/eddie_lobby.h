@@ -27,6 +27,10 @@ public:
     bool confirming() const;
     unsigned selectedWeapon() const; // 0 hands, 1 axe, 2 guitar
     unsigned physicalAction() const; // leased native action pulse
+    bool fretting() const;
+    unsigned fretNote() const; // 1/2/3 native note, latched through a stroke
+    unsigned jamNote() const; // one-frame MIDI note event; zero when idle
+    unsigned placementEvent() const; // 1 saved, 2 failed; zero when no placement commit
     bool exportRig(blvr_xr_bridge::RigFrame&) const;
     bool exportUiMounts(UiMounts&) const;
     bool readRenderedUi(uint64_t epoch,uint64_t sourceFrame,uint64_t poseFrame,

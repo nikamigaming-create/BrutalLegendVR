@@ -20,6 +20,7 @@
 #include "solo_control_legend.h"
 #include "world_quad.h"
 #include "guitar_solo_interaction.h"
+#include "guitar_audio.h"
 #include "pose_bridge.h"
 #include "presentation_cache.h"
 #include "rendered_ui_join.h"
@@ -2026,6 +2027,16 @@ private:
             }
             const unsigned weapon=eddieLobby_.selectedWeapon();
             const unsigned physicalAction=eddieLobby_.physicalAction();
+            static blvr_xr_host::GuitarAudio guitarAudio;
+            if(eddieLobby_.placementEvent())logger_.write(eddieLobby_.placementEvent()==1?
+                "Guitar: body placement saved; release keeps the instrument here":
+                "Guitar: could not save body placement; check file permissions or reset placement in VR settings");
+            if(eddieLobby_.jamNote()&&!(nativeUi_.flags()&(blvr_ui_bridge::SoloNotes|blvr_ui_bridge::SoloRadial|blvr_ui_bridge::BuildRadial)))
+                guitarAudio.pluck(eddieLobby_.jamNote());
+            if(eddieLobby_.fretting()) {
+                frame.controllers[1].activeFlags|=BLVR::GuitarFretMetadata;
+                frame.controllers[0].reserved[0]=eddieLobby_.fretNote();
+            }
             static unsigned previousPhysicalAction=0;
             if(physicalAction&&!previousPhysicalAction)
                 logger_.write(physicalAction==2?"XRHost: right picking hand crossed guitar strings":"XRHost: right hand swung axe");
@@ -3236,6 +3247,7 @@ int main(int argc, char** argv)
                    "               Accept explicitly tagged ordered L/R Brutal Legend frame pairs.\n"
                 << "  --self-test  Check shaders/protocol without touching OpenXR.\n"
                 << "  --check-controls Validate controls.ini without starting OpenXR.\n"
+                << "  --check-runtime Check the selected OpenXR runtime and connected headset.\n"
                 << "  --frames N   Exit after N submitted OpenXR frames.\n"
                 << "  --timeout-ms Exit unsuccessfully if the test exceeds N milliseconds.\n";
             return 0;
@@ -3247,6 +3259,23 @@ int main(int argc, char** argv)
             BLVR::ControlBindings checked;std::string error;
             if(!BLVR::LoadControlBindings(BLVR::ControlsFilePath(),checked,error))throw std::runtime_error(error);
             std::cout<<"PASS: controls configuration (51 actions and VR controls)\n";return 0;
+        }
+        if(hasArgument(argc,argv,"--check-runtime")) {
+            XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
+            strcpy_s(info.applicationInfo.applicationName,"Brutal Legend VR preflight");
+            info.applicationInfo.apiVersion=XR_MAKE_VERSION(1,0,0);
+            const char* extension=XR_KHR_D3D11_ENABLE_EXTENSION_NAME;
+            info.enabledExtensionCount=1;info.enabledExtensionNames=&extension;
+            XrInstance instance=XR_NULL_HANDLE;
+            const XrResult created=xrCreateInstance(&info,&instance);
+            if(XR_FAILED(created))throw std::runtime_error("OpenXR runtime initialization failed ("+std::to_string(created)+"). Choose an installed 64-bit headset runtime in VR settings.");
+            XrSystemGetInfo systemInfo{XR_TYPE_SYSTEM_GET_INFO};systemInfo.formFactor=XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+            XrSystemId system=XR_NULL_SYSTEM_ID;
+            const XrResult found=xrGetSystem(instance,&systemInfo,&system);
+            XrInstanceProperties properties{XR_TYPE_INSTANCE_PROPERTIES};
+            xrGetInstanceProperties(instance,&properties);xrDestroyInstance(instance);
+            if(XR_FAILED(found))throw std::runtime_error("Headset unavailable ("+std::to_string(found)+"). Connect Quest Link / Air Link and wake the headset.");
+            std::cout<<"PASS: OpenXR runtime "<<properties.runtimeName<<" and connected headset\n";return 0;
         }
         if (hasArgument(argc, argv, "--self-test"))
         {

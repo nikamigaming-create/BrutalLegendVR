@@ -28,8 +28,19 @@ messages may retain their previous
 labels until the game recreates them. Movement, turning, solo selection,
 target switching and driving hints follow remapped stick roles.
 
-By default, the left hand holds the guitar neck. The right hand picks across the strings
-and holds the axe. X equips/stows the axe; Y equips/stows the guitar.
+The guitar floats at estimated chest height with its strings facing outward and
+neck to the left. A lighter left-grip squeeze near the neck attaches the
+fretting hand and lets it slide. Squeeze firmly to move and rotate the whole
+guitar, then release to leave it at that spot on your body. The placement is
+saved for your next launch. Left trigger curls the index finger; X curls the
+middle finger and Y curls the ring finger. Touch controllers animate these
+fingers; this mode uses no bare-hand tracking. Release left grip to detach.
+The right hand picks across the strings and holds the axe. X equips/stows the
+axe and Y equips/stows the guitar when the neck is free. While fretting, X/Y
+operate the fingers and keep the guitar equipped. Guitar height, distance,
+neck angle, upward string-face angle and volume can be adjusted in VR settings.
+Use **Reset guitar placement** to return to these settings. Saving a changed
+height, distance or angle also resets the manually placed guitar.
 While driving, hold right grip to grab the wheel, then turn your hand around
 a wheel arc or rotate your wrist. Release to move the right arm freely. The
 left arm remains tracked. The left hand opens when its grip is released; it never snaps to
@@ -48,13 +59,14 @@ brakes/reverses.
 | Use selected weapon | Right trigger, physical right-hand axe swing, or right-hand guitar stroke |
 | Recruit / stage upgrade / research / cancel | While holding command + A in the build wheel: right stick selects, right trigger recruits/upgrades the stage, left trigger requests unit research when available, X cancels a queued unit |
 | Target / vehicle brake and reverse | Left trigger |
-| Earthshaker combo | Squeeze left grip + right grip together; release and squeeze again to repeat. Weapon selection stays unchanged |
+| Earthshaker combo | Squeeze both grips together; release and squeeze again to repeat. Suppressed while the guitar neck is held |
 | Sprint / vehicle nitro | Left stick click |
-| Support a weapon with two hands | Squeeze the other grip near the axe haft or guitar body; release to let go |
+| Support a weapon with two hands | Squeeze the other grip near the axe haft; left grip attaches to the guitar neck |
 | Open solo selection | Right stick click; wheel appears on the guitar headstock |
 | Choose a solo | Touch its wedge with the right index finger, or right stick plus A/right trigger |
 | Play solo with buttons | A = note 1, X = note 2, Y = note 3 |
-| Play solo physically | Strum across the guitar with the right hand on each beat; the next authored note is selected automatically |
+| Play solo physically | Strum with the right hand on each beat; while fretting, left trigger / X / Y select note 1 / 2 / 3; with the neck free, the next authored note is selected automatically |
+| Jam outside a solo | Pick across the strings, slide the held neck, or change the fretting fingers shortly after a stroke |
 | Pause / journal | Left Menu |
 | Recenter | Left Menu + right stick click |
 | Drive | Right grip + hand turn, or left stick; right trigger accelerates, left trigger brakes/reverses |
@@ -72,11 +84,12 @@ Menu** for Start. Wait for each native page before making the next selection.
 These are the default inputs; the menu labels follow your saved remaps.
 
 Repeated physical solo notes require separate strokes. Moving only the fretting
-hand does not play a note. Either grip can remain held during a timed solo;
+hand does not create a new strum. After a jam stroke, sliding or pressing a
+different fretting finger can sound another note for 0.8 seconds. Either grip can remain held during a timed solo;
 the picking hand stays free. Strokes up to about 23 cm from the string plane
 are accepted. The game's rhythm windows and success rules still apply. When
-native note information is unavailable, the manual frets remain: no X/Y = note 1,
-X = note 2, Y = note 3; left grip prevents a fret button from firing before the stroke.
+the neck is held, the index / middle / ring fingers select native note 1 / 2 / 3.
+The game's rhythm windows and success rules remain active.
 
 Hold **left grip + left stick click** for commands. Right stick sends charge/up,
 defend/down, move/right and follow/left. Hold A to keep the build wheel open;
@@ -108,7 +121,7 @@ controller does not count as a physical swing or strum. Invalid head tracking
 also stops old rig and interaction data from being republished.
 
 Weapon selection commits when X or Y is released. Earthshaker uses both grips,
-independently of those selection buttons, and is suppressed during solos,
+independently of those selection buttons, and is suppressed while fretting, during solos,
 driving, pause and stage commands. Hold left trigger and use right trigger to target
 and attack together. Aim comes from the right controller; looking around does
 not aim or fire. With targeting held, right stick switches native targets.

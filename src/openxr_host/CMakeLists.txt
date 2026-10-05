@@ -60,6 +60,7 @@ target_link_libraries(blvr_xr_host PRIVATE
   gdi32
   windowscodecs
   ole32
+  winmm
   dxgi)
 
 get_filename_component(REPOSITORY_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)

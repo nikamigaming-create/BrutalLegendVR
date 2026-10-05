@@ -294,6 +294,10 @@ bool RetargetLive(const blvr_xr_bridge::RigFrame& rig,const float headToBody[16]
     }
     for(unsigned i=0;i<editedCount;++i)if(binding.arm[i]||binding.leg[i]||binding.wing[i])Store(skins[i],XMMatrixInverse(nullptr,Load(binding.reference[i]))*Load(model[i]));
     for(int weapon=0;weapon<2;++weapon) {
+        if(weapon==1&&(rig.presentationFlags&blvr_xr_bridge::RigChestGuitar)) {
+            Store(weapons[weapon],Load(rig.weaponToHead[weapon])*Load(headToBody)*Load(world));
+            continue;
+        }
         const int hand=weapon==0?1:0,wrist=binding.wrist[hand];
         if(wrist<0||static_cast<unsigned>(wrist)>=editedCount)continue;
         const bool trackedHand=(rig.trackedHandMask&(1u<<hand))!=0;
@@ -545,12 +549,14 @@ bool PlayerViewRig_ReadTracked(uint64_t frame,int64_t displayTime,uint64_t epoch
     if(sequence!=source.sequence||candidate.magic!=blvr_xr_bridge::RigMagic||candidate.producerEpoch!=epoch||
         candidate.frameId!=frame||candidate.predictedDisplayTime!=displayTime||!candidate.boneCount||
         candidate.boneCount>blvr_xr_bridge::RigBones||candidate.version!=blvr_xr_bridge::RigVersion||
-        candidate.structBytes!=sizeof(candidate)||candidate.trackedHandMask>3)return false;
+        candidate.structBytes!=sizeof(candidate)||candidate.trackedHandMask>3||
+        (candidate.presentationFlags&~blvr_xr_bridge::RigChestGuitar)||candidate.guitarFret>24)return false;
     out=candidate;return true;
 }
 bool PlayerViewRig_ApplyTracked(const blvr_xr_bridge::RigFrame& rig,const float headWorld[16],bool nativeDrivingPose,bool wheelGrip) {
     if(!editedSkin||!editedSnapshot||rig.boneCount>blvr_xr_bridge::RigBones||rig.boneCount!=binding.count||rig.skeletonSignature!=binding.signature||rig.selectedWeapon>2||
-       rig.version!=blvr_xr_bridge::RigVersion||rig.structBytes!=sizeof(rig)||rig.trackedHandMask>3||rig.supportHeld>1)return false;
+       rig.version!=blvr_xr_bridge::RigVersion||rig.structBytes!=sizeof(rig)||rig.trackedHandMask>3||rig.supportHeld>1||
+       (rig.presentationFlags&~blvr_xr_bridge::RigChestGuitar)||rig.guitarFret>24)return false;
     if(rig.controlsSignature!=ControlsSignature(ActiveBindings())||rig.liveAction>3||
         !std::isfinite(rig.liveActionWeight)||rig.liveActionWeight<0||rig.liveActionWeight>1)return false;
     // Never partially apply a malformed transform or substitute a newer rig

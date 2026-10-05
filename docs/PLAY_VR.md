@@ -1,11 +1,11 @@
 # Play Brütal Legend in VR
 
-1. Extract the complete public release ZIP into a writable folder outside the game.
-2. Run **Setup VR.cmd**, select your installed **BrutalLegend.exe**, and choose
-   **Prepare game**. Setup imports the owned model and textures locally.
+1. Run the Windows installer, or extract the complete portable ZIP into a writable folder outside the game.
+2. Open **Brütal Legend VR** (portable: **Setup VR.cmd**), select your installed **BrutalLegend.exe**, and choose
+   **Prepare / repair game**. Setup imports the owned model and textures locally.
 3. Connect your headset through its PC OpenXR runtime. Quest Link / Air Link
    and Touch controllers are the current profile.
-4. Exit the desktop game, then run **Play VR.cmd** in the extracted folder.
+4. Exit the desktop game, then choose **Play VR** (portable: **Play VR.cmd**).
 5. Wake both controllers. Select **Continue** with right-stick up/down and
    **A**, or touch the opening panel's Confirm switch.
 
@@ -22,6 +22,8 @@ Animations read the running game's current pose; no motion recording is needed.
 | Back / evade | B |
 | Equip or stow axe / guitar | X / Y, on release |
 | Use weapon | Right trigger, physical axe swing or guitar stroke |
+| Guitar neck | Lighter left grip slides on the neck; firm grip moves and rotates the guitar; release leaves it on your body |
+| Guitar fingers | While attached, left trigger curls index, X middle and Y ring; right hand strokes the strings |
 | Earthshaker | Both grips together; release before repeating |
 | Drive | Right grip and hand turn, or left stick; right trigger gas, left trigger brake |
 | Stage commands | Left grip + left stick click, then right stick / A / Y |
@@ -32,6 +34,12 @@ controls. Save reloads the layout during play. Release held buttons after
 saving. See [complete controls](VR_CONTROLS.md) for solos and stage commands.
 
 ## Startup checks
+
+The app's **VR settings** tab saves your runtime, render resolution, frame
+limit, antialiasing, logging and guitar height/distance/neck angle/string-face angle/volume. Changed
+display and guitar settings apply on the next launch. **Check installation**
+reports failures before starting a game. Preferences and control remaps survive
+installer upgrades.
 
 If the headset remains blank, check its PC connection and wake the controllers.
 Read `tools/blvr_xr_host.log` in the extracted release and `blvr.log` beside the
@@ -45,6 +53,8 @@ The launcher uses the registered system OpenXR runtime, with a Meta fallback
 when a development simulator is registered. An explicit runtime can be selected
 with `-RuntimeJson "C:\path\to\runtime.json"`.
 
-This is a preview. Physical headset comfort, the opening mountain ride, precise
-particle attachment and live RTS stage battles still need player verification.
-See [release validation and limitations](RELEASE_0.1.0-preview.1.md).
+This is a preview. Local Ironheade AI Practice recruitment, stage progression,
+orders and flight have simulator evidence. Physical headset comfort, the
+opening mountain ride, precise particle attachment and a complete RTS battle
+still need player verification.
+See [release validation and limitations](RELEASE_0.1.0-preview.3.md).

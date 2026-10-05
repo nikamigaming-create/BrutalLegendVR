@@ -11,8 +11,9 @@ RETAIL = {'.rigcache', '.actionclip', '.mesh', '.rig', '.texture', '.material', 
           '.mp4', '.avi', '.mov', '.mkv', '.webm', '.wav', '.mp3', '.ogg', '.flac',
           '.ppm', '.jpg', '.jpeg', '.webp', '.log', '.csv', '.json', '.jsonl'}
 ART = {'assets/room/basalt.png', 'assets/room/iron-medallion.png',
-       'assets/ui/default-controls.png', 'assets/ui/vr-controls-frame.png'}
-ASSETS = ART | {'assets/room/basalt-prompt.txt', 'assets/room/generation-prompt.txt',
+       'assets/ui/default-controls.png', 'assets/ui/vr-controls-frame.png',
+       'assets/installer/guitar-workshop.png', 'assets/installer/blvr.ico', 'assets/installer/wizard.bmp'}
+ASSETS = ART | {'assets/installer/generation-prompt.txt', 'assets/room/basalt-prompt.txt', 'assets/room/generation-prompt.txt',
                 'assets/room/README.md', 'assets/ui/controls-defaults.ini',
                 'assets/ui/generation-prompt.txt', 'assets/ui/README.md'}
 ROOT_FILES = {'Play VR.cmd', 'Setup VR.cmd', 'Remap Controls.cmd', 'Uninstall VR.cmd',
@@ -20,7 +21,7 @@ ROOT_FILES = {'Play VR.cmd', 'Setup VR.cmd', 'Remap Controls.cmd', 'Uninstall VR
 SCRIPTS = {'scripts/launch_vr.ps1', 'scripts/deploy.ps1', 'scripts/uninstall.ps1',
            'scripts/common.ps1'}
 DOCS = {'docs/VR_CONTROLS.md', 'docs/PLAY_VR.md', 'docs/QUEST_HINTS_2026-09-28.md',
-        'docs/RELEASE_0.1.0-preview.1.md'}
+        'docs/RELEASE_0.1.0-preview.1.md', 'docs/RELEASE_0.1.0-preview.2.md'}
 LICENSES = {'licenses/' + name for name in (
     'MinHook.txt', 'OpenXR.txt', 'JsonCpp.txt', 'DXVK.txt', 'Python.txt', 'Pillow.txt',
     'OpenSSL.txt', 'defusedxml.txt', 'PyInstaller.txt', 'Tcl-Tk.txt', 'PyYAML.txt',

@@ -18,6 +18,7 @@ constexpr uint32_t HostRadialAxesMetadata = 1u<<23;
 constexpr uint32_t HostConfirmMetadata = 1u<<22;
 constexpr uint32_t HostOpeningAxesMetadata = 1u<<21;
 constexpr uint32_t BuildRadialMetadata = 1u<<20;
+constexpr uint32_t GuitarFretMetadata = 1u<<19;
 struct NativeControls {
     uint8_t buttons[NativeActionCount]{};
     uint8_t analog[2]{};
@@ -46,14 +47,14 @@ inline NativeControls MapTouch(const TouchControls& in,const ControlBindings& bi
     // menus, where the same configured input can also change a shoulder tab.
     out.build=in.buildRadial&&!pause&&!in.driving&&!in.soloNotes;
     out.radial=(down(RockStance)||in.soloRadial||in.hostRadial)&&!pause&&!out.command&&!in.driving;
-    out.targeting=down(Target)&&!out.command&&!in.driving;
+    out.targeting=down(Target)&&!out.command&&!in.driving&&!in.guitarFretting;
     const bool normal=!out.command;
     for(unsigned id=0;id<NativeActionCount;++id) {
         const auto action=static_cast<NativeAction>(id);
         press(action,down(action)&&(bindings.actions[id].command?out.command:normal));
     }
     const bool attack=normal&&!out.radial&&!in.soloNotes&&!in.driving&&!pause;
-    const bool combo=attack&&EarthshakerHeld(in,bindings);
+    const bool combo=attack&&!in.guitarFretting&&EarthshakerHeld(in,bindings);
     press(Axe,attack&&(combo||(down(Axe)&&(!in.rigMetadata||in.weapon==1))||in.physical==1));
     press(Guitar,attack&&(combo||(down(Guitar)&&in.rigMetadata&&in.weapon==2)||
         (!in.rigMetadata&&down(Target))||in.physical==2));

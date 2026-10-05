@@ -54,7 +54,7 @@ CONTROL_HELP = {
     'command_boost': 'Vehicle boost while the command chord is held.',
     'recenter_modifier': 'Hold this with the recenter-click input to reset your view. The chord suppresses game input.',
     'recenter_click': 'Hold this with the recenter-modifier input to reset your view.',
-    'support_left': 'Grip input for the left support hand.', 'support_right': 'Grip input for the right support hand.',
+    'support_left': 'Left support grip. A lighter squeeze slides on the guitar neck; a firm squeeze moves and rotates the guitar. Release places it on your body.', 'support_right': 'Grip input for the right support hand.',
     'solo_fret': 'Hold while strumming a solo. The live guitar legend explains remapped A/X/Y note inputs.',
     'solo_accept_alternate': 'Alternative confirmation for solo and held stage build wheels. For build confirmation, choose an input not required by the held build chord.',
     'build_research_alternate': 'Research/upgrade input only while the native build wheel is open and held. Defaults to left trigger; choose an input not required by the held build chord.',
@@ -110,8 +110,11 @@ def validate_game(game):
 
 def atomic_text(path, text):
     temporary = path.with_name(path.name + f'.{os.getpid()}.tmp')
-    temporary.write_text(text, encoding='utf-8')
-    os.replace(temporary, path)
+    try:
+        temporary.write_text(text, encoding='utf-8')
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def prepare(root, game, progress=print):
@@ -124,6 +127,8 @@ def prepare(root, game, progress=print):
     build(root / 'artifacts/eddie-assets', root / 'artifacts/eddie-rig')
     if not (root / 'artifacts/eddie-rig/eddie.rigcache').is_file():
         raise ValueError('Model preparation did not produce a rig.')
+    from blvr_assets_check import validate
+    validate(root)
     settings = {'game_dir': str(game), 'executable_sha256': SUPPORTED_EXE}
     path = root / 'settings.json'
     if path.is_file():
@@ -236,18 +241,48 @@ def save_controls(root, config):
         temporary.unlink(missing_ok=True)
 
 
-def gui(root, controls_only=False):
+def gui(root, controls_only=False, settings_only=False, launch=False):
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
     window = tk.Tk()
-    window.title('Brütal Legend VR — Setup and Controls')
-    window.geometry('860x720')
-    window.minsize(760, 650)
+    window.title('Brütal Legend VR')
+    window.geometry('1040x840')
+    window.minsize(900, 780)
+    window.configure(bg='#111114')
+    style = ttk.Style(window)
+    style.theme_use('clam')
+    style.configure('.', background='#18181d', foreground='#eee9e3', font=('Segoe UI', 10))
+    style.configure('TNotebook', background='#111114', borderwidth=0)
+    style.configure('TNotebook.Tab', padding=(22, 12), background='#24242b')
+    style.map('TNotebook.Tab', background=[('selected', '#3b2720')], foreground=[('selected', '#ffb07c')])
+    style.configure('TButton', padding=(14, 9), background='#303039')
+    style.map('TButton', background=[('active', '#4b3329')], foreground=[('disabled', '#88888f')])
+    style.configure('Primary.TButton', background='#bf4b23', foreground='#ffffff')
+    style.map('Primary.TButton', background=[('active', '#df602e'), ('disabled', '#49342c')])
+    style.configure('TEntry', fieldbackground='#26262d', insertcolor='#ffffff')
+    style.configure('TCombobox', fieldbackground='#26262d', arrowcolor='#ffab70')
+    style.map('TCombobox', fieldbackground=[('readonly', '#26262d')], foreground=[('readonly', '#eee9e3')])
+    style.configure('Treeview', background='#202026', fieldbackground='#202026', rowheight=27)
+    style.configure('Treeview.Heading', background='#303039', padding=8)
+    style.map('Treeview', background=[('selected', '#694030')])
+    banner = tk.Canvas(window, height=172, background='#111114', highlightthickness=0)
+    banner.pack(fill='x')
+    from PIL import Image, ImageTk, ImageOps
+    art_path = root / 'assets/installer/guitar-workshop.png'
+    if art_path.is_file():
+        art = Image.open(art_path).convert('RGB')
+        def redraw_banner(event):
+            banner.image = ImageTk.PhotoImage(ImageOps.fit(art, (event.width, 172), centering=(.5, .38)))
+            banner.delete('all')
+            banner.create_image(0, 0, image=banner.image, anchor='nw')
+            banner.create_text(30, 47, text='BRÜTAL LEGEND VR', fill='#fff5e8', anchor='nw', font=('Segoe UI', 25, 'bold'))
+            banner.create_text(32, 104, text='NIKAMI  /  STEP INTO THE METAL', fill='#ffb07c', anchor='nw', font=('Segoe UI', 10, 'bold'))
+        banner.bind('<Configure>', redraw_banner)
     tabs = ttk.Notebook(window)
     tabs.pack(fill='both', expand=True, padx=12, pady=12)
     setup = ttk.Frame(tabs, padding=14)
     controls = ttk.Frame(tabs, padding=14)
-    tabs.add(setup, text='Game setup')
+    tabs.add(setup, text='Play & setup')
     tabs.add(controls, text='Controls')
     events = queue.Queue()
     game_var = tk.StringVar(value=find_game(root))
@@ -262,7 +297,7 @@ def gui(root, controls_only=False):
             game_var.set(str(Path(selected).parent))
     ttk.Button(line, text='Browse…', command=browse).pack(side='right', padx=8)
     ttk.Label(setup, text='Setup imports your model and textures locally. Animation comes from the live game.\n'
-              'After setup, connect your headset and start Play VR.cmd.', wraplength=780).pack(anchor='w', pady=10)
+              'Connect your headset through Quest Link / Air Link, then choose Play VR.', wraplength=900).pack(anchor='w', pady=10)
     status = tk.StringVar(value='Ready to prepare your installation.')
     ttk.Label(setup, textvariable=status, wraplength=780).pack(anchor='w', pady=16)
 
@@ -272,15 +307,47 @@ def gui(root, controls_only=False):
         except Exception as error:
             messagebox.showerror('Setup', str(error)); return
         prepare_button.configure(state='disabled')
+        play_button.configure(state='disabled'); check_button.configure(state='disabled')
         def worker():
             try:
                 prepare(root, game, lambda text: events.put(('progress', text)))
-                events.put(('done', 'Preparation complete. Start Play VR.cmd.'))
+                events.put(('done', 'Preparation complete. Connect your headset and choose Play VR.'))
             except Exception as error:
                 events.put(('error', str(error)))
         threading.Thread(target=worker, daemon=True).start()
-    prepare_button = ttk.Button(setup, text='Prepare game', command=start_prepare)
+    prepare_button = ttk.Button(setup, text='Prepare / repair game', command=start_prepare)
     prepare_button.pack(anchor='w')
+
+    def launcher_job(check_only=False):
+        prepare_button.configure(state='disabled')
+        play_button.configure(state='disabled'); check_button.configure(state='disabled')
+        status.set('Checking your game, controls and OpenXR runtime…' if check_only else 'Starting your headset and game…')
+        def worker():
+            try:
+                game = validate_game(game_var.get())
+                shell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+                command_line = [str(shell), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                                str(root / 'scripts/launch_vr.ps1'), '-GameDir', str(game)]
+                if check_only:
+                    command_line.append('-CheckOnly')
+                result = subprocess.run(command_line, cwd=root, capture_output=True, text=True,
+                                        encoding='utf-8', errors='replace', timeout=420,
+                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                detail = (result.stdout + '\n' + result.stderr).strip()
+                events.put(('error' if result.returncode else 'done', detail or 'Ready.'))
+            except Exception as error:
+                events.put(('error', str(error)))
+        threading.Thread(target=worker, daemon=True).start()
+    play_line = ttk.Frame(setup); play_line.pack(fill='x', pady=(24, 12))
+    play_button = ttk.Button(play_line, text='Play VR', style='Primary.TButton', command=launcher_job)
+    play_button.pack(side='left')
+    check_button = ttk.Button(play_line, text='Check installation', command=lambda: launcher_job(True))
+    check_button.pack(side='left', padx=12)
+    ttk.Label(setup, text='Touch controllers stay in use. Light grip slides on the neck; firm grip places the guitar on your body.\n'
+              'Settings are saved here. You can change controller bindings during play.', wraplength=900).pack(anchor='w', pady=12)
+    def show_logs():
+        os.startfile(root / 'tools')
+    ttk.Button(setup, text='Open logs folder', command=show_logs).pack(anchor='w')
 
     defaults = controls_config(root / 'assets/ui/controls-defaults.ini')
     try:
@@ -409,11 +476,83 @@ def gui(root, controls_only=False):
     if controls_only:
         tabs.select(controls)
 
+    import blvr_settings
+    preferences = blvr_settings.load(root)
+    settings_tab = ttk.Frame(tabs, padding=18)
+    tabs.insert(1, settings_tab, text='VR settings')
+    ttk.Label(settings_tab, text='Headset, performance and guitar', font=('Segoe UI', 17, 'bold')).pack(anchor='w', pady=(0, 14))
+    fields = {}
+    runtime_line = ttk.Frame(settings_tab); runtime_line.pack(fill='x', pady=8)
+    ttk.Label(runtime_line, text='OpenXR runtime', width=24).pack(side='left')
+    runtime_var = tk.StringVar(value=preferences['runtime_json'])
+    ttk.Combobox(runtime_line, textvariable=runtime_var, values=[''] + blvr_settings.runtimes(), width=64).pack(side='left', fill='x', expand=True)
+    fields['runtime_json'] = runtime_var
+    def browse_runtime():
+        selected_runtime = filedialog.askopenfilename(title='Select a 64-bit OpenXR runtime JSON', filetypes=[('OpenXR runtime', '*.json')])
+        if selected_runtime:
+            runtime_var.set(selected_runtime)
+    ttk.Button(runtime_line, text='Browse…', command=browse_runtime).pack(side='right', padx=(8, 0))
+    ttk.Label(settings_tab, text='Leave blank to use your headset runtime automatically. This changes BLVR only.', wraplength=900).pack(anchor='w', pady=(0, 12))
+    for key, label, choices in [
+        ('render_resolution', 'Pixels per eye', [1024, 1280, 1536, 1792, 2048]),
+        ('frame_limit_fps', 'Game frame limit', [72, 80, 90, 120, 144]),
+        ('guitar_height_cm', 'Guitar below eyes (cm)', list(range(25, 86, 5))),
+        ('guitar_distance_cm', 'Guitar in front (cm)', list(range(20, 71, 5))),
+        ('guitar_angle_degrees', 'Neck angle (degrees)', list(range(0, 71, 5))),
+        ('guitar_face_degrees', 'String face upward (degrees)', list(range(0, 81, 5))),
+        ('guitar_volume', 'Guitar jam volume (%)', list(range(0, 101, 10))),
+    ]:
+        row = ttk.Frame(settings_tab); row.pack(fill='x', pady=5)
+        ttk.Label(row, text=label, width=29).pack(side='left')
+        variable = tk.StringVar(value=str(preferences[key])); fields[key] = variable
+        ttk.Combobox(row, textvariable=variable, values=choices, width=14).pack(side='left')
+    for key, label in [('edge_aa', 'Smooth edges'), ('telemetry', 'Diagnostic telemetry'),
+                       ('performance_logging', 'Performance logging')]:
+        variable = tk.BooleanVar(value=preferences[key]); fields[key] = variable
+        ttk.Checkbutton(settings_tab, text=label, variable=variable).pack(anchor='w', pady=4)
+    preferences_status = tk.StringVar(value='VR settings apply on your next launch. Controls reload during play.')
+    ttk.Label(settings_tab, textvariable=preferences_status, wraplength=900).pack(anchor='w', pady=12)
+    def save_preferences():
+        try:
+            saved = blvr_settings.save(root, {key: variable.get() for key, variable in fields.items()})
+            geometry = ('guitar_height_cm', 'guitar_distance_cm', 'guitar_angle_degrees', 'guitar_face_degrees')
+            if any(saved[key] != preferences[key] for key in geometry):
+                (root / 'guitar-placement.txt').unlink(missing_ok=True)
+            preferences.update(saved)
+            preferences_status.set('Saved. Launch VR to use these settings.')
+        except Exception as error:
+            messagebox.showerror('VR settings', str(error))
+    buttons = ttk.Frame(settings_tab); buttons.pack(anchor='w')
+    ttk.Button(buttons, text='Save VR settings', style='Primary.TButton', command=save_preferences).pack(side='left')
+    def reset_placement():
+        try:
+            (root / 'guitar-placement.txt').unlink(missing_ok=True)
+            preferences_status.set('Guitar placement reset. Your chosen height and angles apply on the next launch.')
+        except OSError as error:
+            messagebox.showerror('Guitar placement', str(error))
+    ttk.Button(buttons, text='Reset guitar placement', command=reset_placement).pack(side='left', padx=12)
+    if settings_only:
+        tabs.select(settings_tab)
+    if launch:
+        window.after(350, launcher_job)
+    def close():
+        if control_snapshot(current) != saved_snapshot:
+            answer = messagebox.askyesnocancel('Unsaved controls', 'Save your controller changes before closing?')
+            if answer is None:
+                return
+            if answer:
+                save()
+                if control_snapshot(current) != saved_snapshot:
+                    return
+        window.destroy()
+    window.protocol('WM_DELETE_WINDOW', close)
+
     def poll():
         while not events.empty():
             kind, text = events.get_nowait(); status.set(text)
             if kind in ('done', 'error'):
                 prepare_button.configure(state='normal')
+                play_button.configure(state='normal'); check_button.configure(state='normal')
             if kind == 'error':
                 messagebox.showerror('Setup', text)
         window.after(100, poll)
@@ -426,15 +565,22 @@ def main():
     parser.add_argument('--prepare', action='store_true')
     parser.add_argument('--game-dir', type=Path)
     parser.add_argument('--controls', action='store_true')
+    parser.add_argument('--settings', action='store_true')
+    parser.add_argument('--launch', action='store_true')
+    parser.add_argument('--check-assets', action='store_true')
     args = parser.parse_args()
     root = (args.root or project_root()).resolve()
-    if args.prepare:
+    if args.check_assets:
+        from blvr_assets_check import validate
+        result=validate(root)
+        if sys.stdout:print('PASS: owned model and textures',result)
+    elif args.prepare:
         game = args.game_dir or find_game(root)
         if not game:
             raise ValueError('Open Setup VR.cmd and select your game installation first.')
         prepare(root, game)
     else:
-        gui(root, args.controls)
+        gui(root, args.controls, args.settings, args.launch)
 
 
 if __name__ == '__main__':
@@ -443,7 +589,7 @@ if __name__ == '__main__':
     except Exception as error:
         if sys.stderr:
             print(f'BLVR setup failed: {error}', file=sys.stderr)
-        elif '--prepare' in sys.argv:
+        elif '--prepare' in sys.argv or '--check-assets' in sys.argv:
             project_root().joinpath('tools/blvr_setup-error.log').write_text(str(error), encoding='utf-8')
         else:
             import tkinter.messagebox

@@ -272,6 +272,7 @@ uintptr_t __cdecl HookBuild(void* state, const void* record, int mask, int conte
         touch.soloRadial=(right.activeFlags&SoloRadialMetadata)!=0;
         touch.buildRadial=(right.activeFlags&BuildRadialMetadata)!=0;
         touch.driving=(right.activeFlags&DrivingMetadata)!=0;
+        touch.guitarFretting=leftActive&&(right.activeFlags&GuitarFretMetadata)!=0;
         touch.hostRadial=rightActive&&(right.activeFlags&HostRadialMetadata)!=0;
         touch.hostAccept=rightActive&&(right.activeFlags&HostAcceptMetadata)!=0;
         touch.hostConfirm=rightActive&&(right.activeFlags&HostConfirmMetadata)!=0;
@@ -288,7 +289,8 @@ uintptr_t __cdecl HookBuild(void* state, const void* record, int mask, int conte
         else if(!strumHeld[inputStream]) {
             const unsigned authored=CameraHook_GetSoloNextNote();
             const bool command=CommandHeld(touch,bindings);
-            strumNote[inputStream]=authored?authored:ScopedActionDown(touch,SoloNote3,command,bindings)?3u:
+            const unsigned fingerNote=touch.guitarFretting?left.reserved[0]:0;
+            strumNote[inputStream]=fingerNote>=1&&fingerNote<=3?fingerNote:authored?authored:ScopedActionDown(touch,SoloNote3,command,bindings)?3u:
                 ScopedActionDown(touch,SoloNote2,command,bindings)?2u:1u;
         }
         strumHeld[inputStream]=playingStroke;

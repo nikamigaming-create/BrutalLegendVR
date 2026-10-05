@@ -151,6 +151,14 @@ int main() {
         const auto sanitized=MapTouch(input,DefaultBindings);
         Check(!sanitized.analog[0]&&!sanitized.analog[1]&&TouchValue(input,TI::LeftGrip)==0&&TouchValue(input,TI::RightGrip)==1,
             "malformed analog values are neutral or clamped before native byte conversion");
+        input={};input.lt=input.lg=input.rg=1;input.guitarFretting=true;
+        const auto fretting=MapTouch(input,DefaultBindings);
+        Check(!fretting.buttons[Target]&&!(fretting.buttons[Axe]&&fretting.buttons[Guitar]),
+            "fretting trigger and picking grip cannot target or slam the held chest guitar");
+        input.guitarFretting=false;
+        const auto released=MapTouch(input,DefaultBindings);
+        Check(released.buttons[Axe]&&released.buttons[Guitar],
+            "ordinary two-grip Earthshaker remains available after releasing the neck");
     }
     Check(VrPromptText("/MovementControls/ | /CameraControls/ | /RadialSelect/ | /TargetSwitch/ | /Steer/",b)==
         "right stick | head movement and left stick snap turn | left stick | left stick while targeting | A + hand turn, or right stick",

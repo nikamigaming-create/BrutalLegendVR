@@ -36,6 +36,22 @@ using CreatePixelShader = HRESULT(WINAPI*)(IDirect3DDevice9*,const DWORD*,IDirec
 using CreateVertexShader = HRESULT(WINAPI*)(IDirect3DDevice9*,const DWORD*,IDirect3DVertexShader9**);
 static CreatePixelShader g_OriginalCreatePixelShader=nullptr;
 static CreateVertexShader g_OriginalCreateVertexShader=nullptr;
+using CreateQuery = HRESULT(WINAPI*)(IDirect3DDevice9*,D3DQUERYTYPE,IDirect3DQuery9**);
+static CreateQuery g_OriginalCreateQuery=nullptr;
+static volatile LONG g_QueryObservationCount=0;
+static HRESULT WINAPI Hook_CreateQuery(IDirect3DDevice9* device,D3DQUERYTYPE type,IDirect3DQuery9** query) {
+    // Observe the retail query path without changing visibility decisions or GPU results.
+    const HRESULT result=g_OriginalCreateQuery(device,type,query);
+    const LONG index=InterlockedIncrement(&g_QueryObservationCount);
+    if(index<=64) {
+        char fields[192]{};
+        std::snprintf(fields,sizeof(fields),"\"index\":%ld,\"type\":%u,\"occlusion\":%s,\"created\":%s,\"hr\":%ld",
+            index,static_cast<unsigned>(type),type==D3DQUERYTYPE_OCCLUSION?"true":"false",
+            SUCCEEDED(result)&&query&&*query?"true":"false",static_cast<long>(result));
+        BLVR::Telemetry_Write("gpu_query_create",fields);
+    }
+    return result;
+}
 static HRESULT WINAPI Hook_CreatePixelShader(IDirect3DDevice9* device,const DWORD* code,IDirect3DPixelShader9** shader) {
     const HRESULT result=g_OriginalCreatePixelShader(device,code,shader);
     if(SUCCEEDED(result)&&shader)BLVR::DumpShader(*shader,"ps");
@@ -2906,6 +2922,13 @@ static HRESULT WINAPI Hook_CreateDevice(
             void* pSetRenderState = vtable[57];
             void* pDrawIndexedPrimitive = vtable[82];
             void* pSetVertexShaderConstantF = vtable[94];
+            if(BLVR::Telemetry_Enabled()) {
+                const MH_STATUS queryStatus=MH_CreateHook(vtable[118],reinterpret_cast<void*>(&Hook_CreateQuery),reinterpret_cast<void**>(&g_OriginalCreateQuery));
+                const MH_STATUS enabled=queryStatus==MH_OK?MH_EnableHook(vtable[118]):queryStatus;
+                char fields[96]{};
+                std::snprintf(fields,sizeof(fields),"\"enabled\":%s,\"hook_status\":%d",enabled==MH_OK?"true":"false",static_cast<int>(enabled));
+                BLVR::Telemetry_Write("gpu_query_observer",fields);
+            }
             char shaderDumpDirectory[MAX_PATH]{};
             if(GetEnvironmentVariableA("BLVR_SHADER_DUMP_DIR",shaderDumpDirectory,sizeof(shaderDumpDirectory))) {
                 if(MH_CreateHook(vtable[106],reinterpret_cast<void*>(&Hook_CreatePixelShader),reinterpret_cast<void**>(&g_OriginalCreatePixelShader))==MH_OK)

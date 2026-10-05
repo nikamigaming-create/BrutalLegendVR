@@ -4,32 +4,38 @@ A Windows OpenXR mod by Nikami for the Steam PC version of Brütal Legend.
 First-person stereo gameplay, tracked Eddie hands and equipment, physical axe
 swings and guitar strokes, forearm menus, and guitar-mounted solo UI.
 
-**[Download 0.1.0-preview.2](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.2), an experimental testing release.** This pass improves
-control editing, tracking-loss behavior, stereo UI attachment and scene
-collection bounds. Local Ironheade AI Practice has reached Stage 3 and accepted
-a Headbanger research purchase; the research's health effect and a complete
-battle remain unverified. A same-frame stereo simulator take kept the Walker
-descent visible through bounded head turns, pitch and lean. Physical headset
-comfort, attack-effect attachment, wider lighting/shader behavior and the full
-campaign still need verification. Other factions, online play and co-op remain
-unverified. See the [release validation notes](docs/RELEASE_0.1.0-preview.2.md).
+**[Download 0.1.0-preview.3](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.3), an experimental testing release.** It adds a Windows installer,
+saved VR settings, a chest-mounted Touch-controller guitar and stronger
+launcher and uninstall recovery. The release includes both-eye simulator
+recordings of guitar sliding, finger input and body placement, plus native
+Ironheade AI Practice recruitment, stage progression, orders and flight.
+Physical headset acceptance, complete battles, all lighting/shader effects,
+other factions, online play and the full campaign remain unverified. See the
+[release validation notes](docs/RELEASE_0.1.0-preview.3.md).
 
 ## Install and play
 
+Use **BrutalLegendVR-0.1.0-preview.3-Setup.exe** for a per-user installation
+with Start menu shortcuts and an integrated Play, settings and controls app.
+The portable ZIP includes the same runtime and its dependencies; Python is
+not required to play.
+
 1. Install and launch your legally owned Steam copy of Brütal Legend once.
-2. Extract the entire release ZIP into a writable folder outside the game.
-3. Run **Setup VR.cmd**, select **BrutalLegend.exe**, and choose **Prepare game**.
+2. Run the Windows installer, or extract the entire portable release ZIP into a writable folder outside the game.
+3. Open **Brütal Legend VR**, select **BrutalLegend.exe**, and choose **Prepare / repair game**. In the portable package, use **Setup VR.cmd**.
 4. Connect your headset through its PC OpenXR runtime. Quest Link / Air Link
    with Touch controllers is the current controller profile.
-5. Exit any running desktop game, then run **Play VR.cmd**.
+5. Exit any running desktop game, then choose **Play VR**. Use **VR settings** to select a runtime and adjust graphics, guitar placement and volume.
 
 The first setup imports Eddie's model, skeleton and textures locally from your
 installation. The release contains no retail game assets. Animation uses the
 game's current pose at runtime; no idle, walk or attack recording is required.
-Keep the extracted folder: the launcher and OpenXR host run from it.
+For the portable ZIP, keep the extracted folder: the launcher and OpenXR host
+run from it.
 
 The launcher checks the supported executable before installing the hook.
-Existing DLLs are backed up. **Uninstall VR.cmd** restores those files when
+Existing DLLs are backed up. Deployment stages the whole update and rolls back
+if it cannot complete. **Uninstall VR.cmd** restores those files when
 their installed hashes still match; your saves and imported model remain.
 
 Supported executable SHA-256:
@@ -49,6 +55,9 @@ Supported executable SHA-256:
 | Back / evade / block | B |
 | Equip or stow axe / guitar | X / Y, on release |
 | Attack | Right trigger with a selected weapon, physical axe swing or guitar stroke |
+| Hold and slide guitar neck | Lighter left grip near the neck; slide the left controller along it |
+| Reposition guitar on body | Firm left grip while attached; move and rotate, then release to save placement |
+| Guitar fingers while holding neck | Left trigger: index; X: middle; Y: ring. Right-hand strokes play notes |
 | Target | Left trigger |
 | Earthshaker | **Left grip + right grip together**; release before repeating |
 | Solo selection | Right stick click; right stick + A / right trigger, or touch the wedge |
@@ -57,6 +66,15 @@ Supported executable SHA-256:
 | Stage commands | Hold left grip + left stick click; right stick orders, hold A for build wheel, Y fly |
 | Held build wheel | Keep command + A held; right stick selects, right trigger recruits/upgrades the stage, left trigger requests unit research when available, X cancels a queued unit |
 | Pause / recenter | Left Menu / left Menu + right stick click |
+
+The guitar stays at estimated chest height when selected. Head pitch and roll
+let you look down at it; large turns gradually reorient the chest estimate.
+Lighter left grip attaches the fretting hand. A firm grip moves and rotates the
+whole guitar; release leaves it on your body and saves that placement for the
+next launch. VR settings can reset the saved placement.
+Finger buttons retain the equipped guitar while the neck is held. Touch
+controllers estimate finger poses from triggers, grip and button contact;
+independent bare-finger motion is unavailable with these controllers.
 
 In the opening 3D room, right-stick left/right turns the room. Use **left-stick
 left/right** to change the native carousel. To try the observed local stage
@@ -92,7 +110,7 @@ panels appear only when their rendered geometry matches both submitted eyes;
 they are withheld while that matching data is unavailable.
 
 See [complete controls](docs/VR_CONTROLS.md) and
-[preview validation and known issues](docs/RELEASE_0.1.0-preview.2.md).
+[preview validation and known issues](docs/RELEASE_0.1.0-preview.3.md).
 
 ![Default Touch controls](assets/ui/default-controls.png)
 

@@ -22,6 +22,7 @@ struct TouchControls {
     bool a=false,b=false,x=false,y=false,leftClick=false,rightClick=false,menu=false;
     bool rigMetadata=false,soloNotes=false,soloRadial=false,buildRadial=false,driving=false,hostRadial=false,hostAccept=false,hostConfirm=false;
     unsigned weapon=0,physical=0,soloStrumNote=0;
+    bool guitarFretting=false;
 };
 enum class TouchInput { A,B,X,Y,LeftTrigger,RightTrigger,LeftGrip,RightGrip,
     LeftClick,RightClick,Menu,LeftUp,LeftDown,LeftLeft,LeftRight,

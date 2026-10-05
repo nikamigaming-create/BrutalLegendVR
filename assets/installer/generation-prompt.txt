@@ -1,0 +1,10 @@
+Built-in imagegen, October 4, 2026. Original installer and launcher artwork.
+
+Use case: stylized-concept
+Asset type: original artwork for the Brütal Legend VR Windows installer and launcher.
+Primary request: a polished heavy-metal fantasy illustration of a red-and-black electric guitar with its neck rising toward the upper left, an axe beside it, resting in a dark roadie's backstage workshop. Hands are NOT shown. Embers, worn black iron, a few orange molten highlights and charcoal basalt form the background. The guitar is the unmistakable hero, with physically sensible strings, frets, pickups and an angular body. Evoke a premium rock game without reproducing any existing game character, logo or screenshot.
+Composition: landscape 1536 by 1024 artwork, strong subject concentrated in the right half; left half mostly atmospheric charcoal darkness with generous clean space for UI text. Keep important instrument details inset from image edges so the right half can also be cropped into a tall installer sidebar.
+Style: highly finished painted 3D game key art, dramatic warm stage lighting, crisp metal and leather texture, restrained ember particles, deep black shadows.
+Constraints: NO text, NO letters, NO watermark, NO frames, NO UI controls, NO people. Original artwork suitable for shipping with an asset-free VR mod.
+
+wizard.bmp and blvr.ico are size/format derivatives of guitar-workshop.png.

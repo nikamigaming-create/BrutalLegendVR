@@ -13,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <stdexcept>
@@ -251,6 +252,12 @@ struct EddieLobby::Impl {
     bool driving=false;
     unsigned lastNoteButtons=0,lastNativeSolo=0;
     bool physicalPlayback=false,supportHeld=false,opening=true;
+    bool guitarHeld=false,guitarMoving=false,chestLatched=false,guitarPlacementLoaded=false;
+    XMFLOAT4X4 guitarPlacement{},guitarCarry{};
+    std::filesystem::path guitarPlacementFile;
+    unsigned placementEvent=0;
+    float chestYaw=0,guitarY=.28f,lastJamStroke=-10;
+    unsigned guitarFret=0,fingerNote=1,jamEvent=0,lastFretButtons=0,lastGuitarFret=0;
     bool earthshakerDown=false;
     uint64_t sourceControlsSignature=0;
     XMFLOAT3 supportPoint{},lastAxeTip{},lastStrum{},lastPickingHand{};
@@ -291,7 +298,8 @@ struct EddieLobby::Impl {
             XMVectorSet(hand==0?-1.f:1.f,0,0,0),
             XMVectorSet(0,1,0,0),XMVectorSet(0,0,0,1));
     }
-    void fitGrip(int hand,std::array<XMFLOAT4X4,MaxBones>& model,XMMATRIX weapon,bool guitar) const {
+    void fitGrip(int hand,std::array<XMFLOAT4X4,MaxBones>& model,XMMATRIX weapon,bool guitar,
+                 const std::array<float,5>* strengths=nullptr) const {
         const char* fingers[]{"Index","Middle","Ring","Pinky","Thumb"};
         const XMMATRIX inverseWeapon=XMMatrixInverse(nullptr,weapon);
         for(int finger=0;finger<5;++finger) {
@@ -306,7 +314,7 @@ struct EddieLobby::Impl {
             if(guitar) {
                 // Actual imported fretboard +Z surface and rear neck -Z.
                 contact=XMVectorSet(finger==4?.012f:.015f+static_cast<float>(finger)*.006f,
-                    XMVectorGetY(original),finger==4?-.040f:.055f,1);
+                    XMVectorGetY(original),finger==4?-.040f:.055f+(strengths?(1-(*strengths)[finger])*.055f:0),1);
             } else {
                 XMVECTOR radial=XMVectorSet(XMVectorGetX(original),0,XMVectorGetZ(original),0);
                 radial=XMVector3Normalize(radial)*.072f;
@@ -384,10 +392,16 @@ struct EddieLobby::Impl {
         XMStoreFloat4x4(&posed[forearm],XMLoadFloat4x4(&sourcePose[forearm])*forearmDelta);
         // Native game-evaluated finger poses, relative to their actual parents.
         // Interpolate toward the authored grip; never invent mirrored curls.
-        const float curl=std::clamp(controller.squeeze,0.f,1.f);
         for(size_t i=0;i<bones.size();++i) {
             const auto& b=bones[i];
             if(static_cast<int>(i)==wrist || !descendant(static_cast<int>(i),wrist)) continue;
+            float curl=std::clamp(controller.squeeze,0.f,1.f);
+            if(b.name.find("Index")!=std::string::npos&&(controller.activeFlags&blvr_xr_bridge::ControllerTrigger))
+                curl=std::clamp(controller.trigger,0.f,1.f);
+            if(b.name.find("Thumb")!=std::string::npos&&(controller.activeFlags&
+                (blvr_xr_bridge::ControllerPrimaryTouch|blvr_xr_bridge::ControllerSecondaryTouch|blvr_xr_bridge::ControllerThumbstickTouch)))
+                curl=(controller.buttons&(blvr_xr_bridge::ControllerPrimaryTouched|blvr_xr_bridge::ControllerSecondaryTouched|
+                    blvr_xr_bridge::ControllerThumbstickTouched|blvr_xr_bridge::ControllerThumbrestTouched))?.85f:.1f;
             const XMMATRIX local=XMLoadFloat4x4(&b.reference)*XMLoadFloat4x4(&bones[b.parent].inverse);
             XMMATRIX result=blendMatrices(local,XMLoadFloat4x4(&gripLocal[hand][i]),curl)*XMLoadFloat4x4(&posed[b.parent]);
             XMStoreFloat4x4(&posed[i],result);
@@ -448,19 +462,132 @@ struct EddieLobby::Impl {
         }
         if(supportHeld&&selected==1)fitGrip(secondary,posed,attached*XMMatrixInverse(nullptr,body),false);
     }
+    static float preference(const char* name,float fallback,float low,float high) {
+        char text[32]{};GetEnvironmentVariableA(name,text,sizeof(text));
+        if(!text[0])return fallback;
+        char* end=nullptr;const float value=std::strtof(text,&end);
+        return end!=text&&!*end&&std::isfinite(value)?std::clamp(value,low,high):fallback;
+    }
+    static bool validPlacement(const XMFLOAT4X4& placement) {
+        if(!usableMatrix(reinterpret_cast<const float*>(&placement)))return false;
+        const XMMATRIX m=XMLoadFloat4x4(&placement);
+        if(length(m.r[3])>2.f||XMVectorGetX(XMMatrixDeterminant(m))<.99f)return false;
+        for(int row=0;row<3;++row) {
+            if(std::fabs(length(m.r[row])-1.f)>.001f)return false;
+            for(int other=row+1;other<3;++other)
+                if(std::fabs(XMVectorGetX(XMVector3Dot(m.r[row],m.r[other])))>.001f)return false;
+        }
+        return true;
+    }
+    void loadPlacement(XMMATRIX fallback) {
+        guitarPlacementLoaded=true;XMStoreFloat4x4(&guitarPlacement,fallback);
+        if(guitarPlacementFile.empty())return;
+        std::ifstream stream(guitarPlacementFile);std::string version,extra;
+        XMFLOAT4X4 saved{};stream>>version;
+        for(int i=0;i<16&&stream;++i)stream>>reinterpret_cast<float*>(&saved)[i];
+        if(stream&&version=="BLVR_GUITAR_PLACEMENT_V1"&&!(stream>>extra)&&validPlacement(saved))guitarPlacement=saved;
+    }
+    void finishPlacement() {
+        if(!guitarMoving)return;
+        guitarMoving=false;motionValid=false;
+        if(guitarPlacementFile.empty())return;
+        auto temporary=guitarPlacementFile;temporary+=L".tmp";
+        std::ofstream stream(temporary,std::ios::trunc);stream.precision(9);
+        stream<<"BLVR_GUITAR_PLACEMENT_V1\n";
+        for(int i=0;i<16;++i)stream<<reinterpret_cast<const float*>(&guitarPlacement)[i]<<(i%4==3?'\n':' ');
+        stream.flush();const bool written=stream.good();stream.close();
+        const bool committed=written&&MoveFileExW(temporary.c_str(),guitarPlacementFile.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
+        placementEvent=committed?1u:2u;
+        if(!committed){std::error_code ignored;std::filesystem::remove(temporary,ignored);}
+    }
+    void chestGuitar(const blvr_xr_bridge::PoseBridge& input,XMMATRIX body,XMMATRIX headWorld,float dt,bool interactive) {
+        // Row vectors, meters, +Y along the owned neck and +Z out of its strings.
+        // Translation follows the chest estimate; head pitch/roll never tilt the
+        // instrument. A yaw dead zone lets the player inspect either hand.
+        const float headYaw=std::atan2(XMVectorGetX(headWorld.r[2]),XMVectorGetZ(headWorld.r[2]));
+        if(!chestLatched){chestYaw=headYaw;chestLatched=true;}
+        const float difference=std::atan2(std::sin(headYaw-chestYaw),std::cos(headYaw-chestYaw));
+        if(std::fabs(difference)>.95f)chestYaw+=std::clamp(difference,-dt*2.f,dt*2.f);
+        static const float chestHeight=preference("BLVR_GUITAR_HEIGHT_CM",53,25,85)*.01f;
+        static const float distance=preference("BLVR_GUITAR_DISTANCE_CM",38,20,70)*.01f;
+        static const float tilt=preference("BLVR_GUITAR_ANGLE",35,0,70)*XM_PI/180;
+        static const float faceTilt=preference("BLVR_GUITAR_FACE_ANGLE",50,0,80)*XM_PI/180;
+        const XMMATRIX chestRotation=XMMatrixRotationY(chestYaw);
+        // The imported string face is +Z. OpenXR forward is -Z: turn the
+        // instrument about its neck before applying the playing tilt, so its
+        // strings face away from the chest while its neck stays on the left.
+        // Tip the face upward so the player above the chest sees the strings,
+        // rather than the wooden back of a vertical instrument.
+        if(!guitarPlacementLoaded)loadPlacement(XMMatrixRotationY(XM_PI)*XMMatrixRotationZ(tilt)*XMMatrixRotationX(faceTilt)*XMMatrixTranslation(.16f,-chestHeight,-distance));
+        const XMMATRIX chestAnchor=chestRotation*move(headWorld.r[3]);
+        XMMATRIX weapon=XMLoadFloat4x4(&guitarPlacement)*chestAnchor;
+        XMStoreFloat4x4(&weapons[0],weapon);
+        supportHeld=false;
+        if(!interactive||!tracked[0]){finishPlacement();guitarHeld=false;lastFretButtons=0;return;}
+        const auto& left=input.controllers[0];
+        const float grip=BLVR::TouchValue(BLVR::TouchFromPose(input),BLVR::ActiveBindings().supportLeft);
+        if(grip<(guitarHeld?.18f:.32f)){finishPlacement();guitarHeld=false;lastFretButtons=0;return;}
+        const XMMATRIX controllerPalm=XMMatrixScaling(handScale,handScale,handScale)*palmOffset(0)*matrix(left.gripPose)*XMLoadFloat4x4(&nav);
+        if(guitarMoving&&grip<.65f)finishPlacement();
+        const float neckTop=(std::max)(.35f,(std::min)(guitarHeadstockY-.16f,.88f));
+        if(guitarMoving) {
+            const XMMATRIX candidate=XMLoadFloat4x4(&guitarCarry)*controllerPalm;
+            XMFLOAT4X4 placement;XMStoreFloat4x4(&placement,candidate*XMMatrixInverse(nullptr,chestAnchor));
+            if(validPlacement(placement)){guitarPlacement=placement;weapon=candidate;}
+            else {finishPlacement();guitarHeld=false;lastFretButtons=0;return;}
+        } else {
+            const XMVECTOR local=XMVector3TransformCoord(controllerPalm.r[3],XMMatrixInverse(nullptr,weapon));
+            guitarY=std::clamp(XMVectorGetY(local),.12f,neckTop);
+            const XMVECTOR gripCenter=XMVectorSet(.103506f,guitarY,.014298f,1);
+            if(length(local-gripCenter)>(guitarHeld?.30f:.22f)){guitarHeld=false;lastFretButtons=0;return;}
+            // Soft grip slides on the neck; a firm squeeze carries the whole
+            // instrument with the controller. Release places it on the chest.
+            if(grip>=.85f) {
+                guitarMoving=true;motionValid=false;
+                XMStoreFloat4x4(&guitarCarry,weapon*XMMatrixInverse(nullptr,controllerPalm));
+            }
+        }
+        const auto unconstrained=posed;
+        const int wrist=bone("Lf_Wrist");
+        const XMMATRIX wristWorld=XMMatrixInverse(nullptr,XMLoadFloat4x4(&gripWeapon[0]))
+            *XMMatrixTranslation(0,guitarY-.28f,0)*weapon;
+        const XMMATRIX desiredPalm=palm(0)*XMLoadFloat4x4(&bones[wrist].inverse)*wristWorld;
+        XMFLOAT4X4 constrained;XMStoreFloat4x4(&constrained,desiredPalm);
+        auto frettingHand=left;frettingHand.squeeze=1;arm(0,frettingHand,body,&constrained);
+        const XMMATRIX actual=palm(0)*XMLoadFloat4x4(&bones[wrist].inverse)*XMLoadFloat4x4(&posed[wrist])*body;
+        if(length(actual.r[3]-desiredPalm.r[3])>.10f){posed=unconstrained;finishPlacement();guitarHeld=false;}
+        else {
+            guitarHeld=true;
+            const float index=std::clamp(left.trigger,0.f,1.f);
+            const float middle=(left.buttons&blvr_xr_bridge::ControllerPrimaryClick)?1.f:.05f;
+            const float ring=(left.buttons&blvr_xr_bridge::ControllerSecondaryClick)?1.f:.05f;
+            const std::array<float,5> strengths{index,middle,ring,.65f,1.f};
+            fitGrip(0,posed,weapon*XMMatrixInverse(nullptr,body),true,&strengths);
+            fingerNote=ring>.5f?3u:middle>.5f?2u:1u;
+            guitarFret=static_cast<unsigned>(std::clamp(std::lround((guitarY-.12f)/(neckTop-.12f)*12),0l,12l));
+            const unsigned fingers=(index>.65f?1u:0u)|(middle>.5f?2u:0u)|(ring>.5f?4u:0u);
+            if(!guitarMoving&&clock-lastJamStroke<.8f&&((fingers&~lastFretButtons)||guitarFret!=lastGuitarFret))
+                jamEvent=40+guitarFret+(fingerNote==3?4u:fingerNote==2?2u:0u);
+            lastFretButtons=fingers;lastGuitarFret=guitarFret;
+        }
+        // The wrist solve can never take ownership of the floating instrument.
+        XMStoreFloat4x4(&weapons[0],weapon);
+    }
     void update(const blvr_xr_bridge::PoseBridge& input,float dt,bool openingRoom,uint32_t nativeSolo,bool nativeDriving,
         const BLVR::ControlBindings& bindings) {
         opening=openingRoom;
+        jamEvent=0;placementEvent=0;
         clock+=dt;
         if(!(input.flags&blvr_xr_bridge::PoseBridgeHmdValid)||!usablePose(input.hmdPose)) {
             // Do not republish the preceding pose or retain an interaction
             // pulse while the exact source head pose is unavailable.
-            sourceInput={};tracked[0]=tracked[1]=false;
+            finishPlacement();sourceInput={};tracked[0]=tracked[1]=false;
             action=-1;playing=false;actionPulseUntil=pressUntil=0;
-            motionValid=false;supportHeld=false;return;
+            motionValid=false;supportHeld=false;guitarHeld=false;chestLatched=false;return;
         }
         nativeDriving=nativeDriving&&!opening;
         if(nativeDriving!=driving) {
+            finishPlacement();
             if(nativeDriving) {weaponBeforeDriving=selected;selected=0;}
             else selected=weaponBeforeDriving;
             driving=nativeDriving;
@@ -472,6 +599,7 @@ struct EddieLobby::Impl {
         sourceInput=input;
         const auto& head=input.hmdPose;
         if(!latched || generation!=input.referenceSpaceGeneration || recenter!=input.recenterRequestId) {
+            finishPlacement();
             latched=true; generation=input.referenceSpaceGeneration; recenter=input.recenterRequestId;
             origin={head.position[0],head.position[1],head.position[2]}; navigation={};yaw=0;
             // LOCAL's origin is commonly at the headset, not at the floor.
@@ -483,7 +611,7 @@ struct EddieLobby::Impl {
             XMMATRIX initial=XMMatrixRotationY(angle)*XMMatrixTranslation(origin.x,floorY,origin.z);
             XMStoreFloat4x4(&panel,XMMatrixTranslation(0,2.10f,-3.1f)*initial);
             lastContact[0]=lastContact[1]=1; contactLatched=false; turnLatched=false;
-            motionValid=false;supportHeld=false;
+            motionValid=false;supportHeld=false;guitarHeld=false;chestLatched=false;
         }
         XMMATRIX navigationMatrix=XMMatrixRotationY(yaw)*XMMatrixTranslation(navigation.x,navigation.y,navigation.z);
         XMMATRIX headWorld=matrix(head)*navigationMatrix;
@@ -494,7 +622,7 @@ struct EddieLobby::Impl {
         const bool pause=BLVR::ScopedActionDown(touch,BLVR::UiStart,commandMode,bindings)||
             BLVR::ScopedActionDown(touch,BLVR::Journal,commandMode,bindings)||BLVR::RecenterHeld(touch,bindings);
         const bool earthshaker=!opening&&!driving&&!commandMode&&!nativeSolo&&
-            !pause&&BLVR::EarthshakerHeld(touch,bindings);
+            !pause&&!guitarHeld&&BLVR::EarthshakerHeld(touch,bindings);
         // BuildRadial also needs the guitar as its native UI carrier. Preserve
         // that attachment policy without interpreting it as timed solo notes.
         const bool soloMode=!driving&&(nativeSolo||touch.hostRadial||(!commandMode&&!pause&&
@@ -508,7 +636,7 @@ struct EddieLobby::Impl {
             motionValid=false;actionPulseUntil=0;lastNoteButtons=0;
             lastNativeSolo=nativeSolo;
         }
-        const unsigned selections=(driving||commandMode||soloMode||earthshaker||pause)?0:
+        const unsigned selections=(driving||commandMode||soloMode||earthshaker||pause||guitarHeld)?0:
             (BLVR::TouchValue(touch,bindings.equipAxe)>.5f?1u:0u)|(BLVR::TouchValue(touch,bindings.equipGuitar)>.5f?2u:0u);
         if(driving||commandMode||soloMode||earthshaker) pendingSelection=0;
         pendingSelection|=selections;
@@ -521,7 +649,7 @@ struct EddieLobby::Impl {
             if(pendingSelection==2u) chosen=selected==2?0u:2u;
             pendingSelection=0;
         }
-        if(chosen!=selected) {selected=chosen;supportHeld=false;motionValid=false;action=-1;}
+        if(chosen!=selected) {finishPlacement();selected=chosen;supportHeld=false;motionValid=false;action=-1;guitarHeld=false;lastFretButtons=0;}
         lastSelectionButtons=selections;
         float turnX=0,turnY=0,moveX=0,moveY=0;
         BLVR::StickValues(touch,bindings.turnStick,turnX,turnY);
@@ -568,12 +696,13 @@ struct EddieLobby::Impl {
         for(int hand=0;hand<2;++hand) {
             auto controller=input.controllers[hand];
             tracked[hand]=(controller.activeFlags&blvr_xr_bridge::ControllerGripPose)!=0&&usablePose(controller.gripPose);
-            equipped[hand]=tracked[hand] && selected==(hand==0?2u:1u);
+            equipped[hand]=tracked[hand] && hand==1 && selected==1;
             if(equipped[hand]) controller.squeeze=1;
             if(tracked[hand]) arm(hand,controller,body);
 
         }
-        if((nativeSolo&2u)||earthshaker) supportHeld=false;
+        if(selected==2)chestGuitar(input,body,headWorld,dt,!commandMode&&!pause&&!(nativeSolo&1u));
+        else if((nativeSolo&2u)||earthshaker) supportHeld=false;
         else twoHand(input,body);
         playing=action>=0;
         if(playing && clock-actionStart >= (action==2?.86f:1.25f)) {
@@ -643,6 +772,7 @@ struct EddieLobby::Impl {
             const int index=bone("Rt_Index3"),previous=bone("Rt_Index2");
             const XMVECTOR referenceTip=position(index)+(position(index)-position(previous))*.72f;
             const XMVECTOR tip=XMVector3TransformCoord(referenceTip,XMLoadFloat4x4(&bones[index].inverse)*XMLoadFloat4x4(&posed[index]));
+            XMStoreFloat3(&pickingHand,XMVector3TransformCoord(tip,body*XMMatrixInverse(nullptr,XMLoadFloat4x4(&nav))));
             XMStoreFloat3(&strum,XMVector3TransformCoord(tip,body*XMMatrixInverse(nullptr,XMLoadFloat4x4(&weapons[0]))));
         }
         bool gesture=false;
@@ -661,12 +791,13 @@ struct EddieLobby::Impl {
             const float fraction=crosses?lastStrum.x/(lastStrum.x-strum.x):0.f;
             const float crossingY=lastStrum.y+(strum.y-lastStrum.y)*fraction;
             const float crossingZ=lastStrum.z+(strum.z-lastStrum.z)*fraction;
-            if(selected==2&&!(nativeSolo&1u)&&tracked[0]&&tracked[1]&&!supportHeld&&crosses&&crossingY>-.65f&&crossingY<.01f&&
+            if(selected==2&&!guitarMoving&&!(nativeSolo&1u)&&tracked[0]&&tracked[1]&&!supportHeld&&crosses&&crossingY>-.65f&&crossingY<.01f&&
                std::fabs(crossingZ-.045f)<.23f&&strumSpeed>.25f&&strumSpeed<12&&pickingSpeed>.15f)gesture=true;
         }
         if(gesture&&clock-lastPhysicalAction>(selected==2?.18f:.35f)) {
             action=static_cast<int>(selected);actionStart=clock;physicalPlayback=true;
             lastPhysicalAction=clock;pulseAction=selected;actionPulseUntil=clock+(selected==2?.09f:.18f);
+            if(selected==2){lastJamStroke=clock;jamEvent=40+guitarFret+(fingerNote==3?4u:fingerNote==2?2u:0u);}
         }
         lastAxeTip=axeTip;lastStrum=strum;lastPickingHand=pickingHand;
         motionValid=!driving&&(selected==1?tracked[1]:(tracked[0]&&tracked[1]));
@@ -725,7 +856,9 @@ struct EddieLobby::Impl {
             XMMATRIX transform=XMLoadFloat4x4(&root);
             if(mesh.group) {
                 const unsigned hand=mesh.group==1?1u:0u;
-                if(!equipped[hand]) continue;
+                // A chest-mounted guitar has independent visibility from
+                // the hand. The free fretting hand must not cull the guitar.
+                if((mesh.group==1&&!equipped[hand])||(mesh.group==2&&selected!=2)) continue;
                 transform=XMLoadFloat4x4(&weapons[hand]);
             }
             draw(mesh.vb.Get(),mesh.ib.Get(),mesh.count,mesh.texture.Get(),transform,vp,mesh.color,
@@ -754,6 +887,8 @@ bool EddieLobby::exportRig(blvr_xr_bridge::RigFrame& output) const {
     output.selectedWeapon=p.selected;
     output.controlsSignature=p.sourceControlsSignature;
     output.supportHeld=p.supportHeld?1u:0u;
+    output.presentationFlags=p.selected==2?blvr_xr_bridge::RigChestGuitar:0;
+    output.guitarFret=p.guitarFret;
     if(p.playing&&!p.physicalPlayback&&!p.opening&&
        (p.action==3?output.trackedHandMask==3:p.action==2?output.trackedHandMask==3:(output.trackedHandMask&2u))) {
         output.liveAction=static_cast<uint32_t>(p.action);
@@ -877,12 +1012,18 @@ bool EddieLobby::ready() const {return impl_->loaded;}
 bool EddieLobby::confirming() const {return impl_->clock<impl_->pressUntil;}
 unsigned EddieLobby::selectedWeapon() const {return impl_->selected;}
 unsigned EddieLobby::physicalAction() const {return impl_->clock<impl_->actionPulseUntil?impl_->pulseAction:0u;}
+bool EddieLobby::fretting() const {return impl_->guitarHeld;}
+unsigned EddieLobby::fretNote() const {return impl_->fingerNote;}
+unsigned EddieLobby::jamNote() const {return impl_->jamEvent;}
+unsigned EddieLobby::placementEvent() const {return impl_->placementEvent;}
 void EddieLobby::update(const blvr_xr_bridge::PoseBridge& input,float seconds,bool opening,uint32_t nativeSolo,bool driving) {if(ready()) impl_->update(input,std::clamp(seconds,0.f,.05f),opening,nativeSolo,driving,BLVR::ActiveBindings());}
 void EddieLobby::render(ID3D11RenderTargetView* target,uint32_t width,uint32_t height,const XrView& view,ID3D11ShaderResourceView* menu) {impl_->render(target,width,height,view,menu);}
 
 bool EddieLobby::initialize(ID3D11Device* device,ID3D11DeviceContext* context,const std::filesystem::path& directory,std::string& failure) {
     try {
         auto& p=*impl_;p.device=device;p.context=context;
+        wchar_t placementFile[MAX_PATH]{};
+        p.guitarPlacementFile=GetEnvironmentVariableW(L"BLVR_GUITAR_PLACEMENT_FILE",placementFile,MAX_PATH)?std::filesystem::path(placementFile):directory.parent_path().parent_path()/"guitar-placement.txt";
         std::ifstream stream(directory/"eddie.rigcache",std::ios::binary);char magic[8];bytes(stream,magic,8);
         if(std::memcmp(magic,"BLVRIG02",8)) throw std::runtime_error("Eddie cache version mismatch");
         unsigned boneCount=0,meshCount=0;read(stream,boneCount);read(stream,meshCount);
@@ -991,6 +1132,7 @@ bool EddieLobby::visualTest(const std::filesystem::path& assets,const std::files
         ComPtr<ID3D11Device> device;ComPtr<ID3D11DeviceContext> context;D3D_FEATURE_LEVEL level{};
         check(D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,0,nullptr,0,D3D11_SDK_VERSION,&device,&level,&context),"Rig test device");
         EddieLobby lobby;if(!lobby.initialize(device.Get(),context.Get(),assets,failure))return false;
+        lobby.impl_->guitarPlacementFile.clear(); // deterministic fixture, no player calibration writes
         std::filesystem::create_directories(output);
         constexpr unsigned width=1200,height=1000;
         D3D11_TEXTURE2D_DESC desc{};desc.Width=width;desc.Height=height;desc.MipLevels=desc.ArraySize=1;
@@ -1043,7 +1185,7 @@ bool EddieLobby::visualTest(const std::filesystem::path& assets,const std::files
                         throw std::runtime_error("Anatomical palm does not follow OpenXR grip axes");
                     XMStoreFloat4x4(&openingPalms[hand],actual);
                 }
-                if(weapon) {
+                if(weapon==1) {
                     const int hand=weapon==1?1:0;
                     const XMMATRIX held=XMLoadFloat4x4(&calibration.weapons[hand]),grip=matrix(frame.controllers[hand].gripPose);
                     if(XMVectorGetX(XMVector3Dot(XMVector3Normalize(held.r[1]),-grip.r[2]))<.999f
@@ -1064,6 +1206,87 @@ bool EddieLobby::visualTest(const std::filesystem::path& assets,const std::files
             <<" hand_weapon_scale="<<calibration.handScale<<" local_origin_floor_and_mode_parity=pass\n";
         frame.hmdPose.position[1]=1.7f;++frame.recenterRequestId;
         for(auto& controller:frame.controllers)controller.gripPose.position[1]=1.25f;
+        // A floating chest instrument has its own frame. A free left hand can
+        // move without translating it; a gripped hand slides only on the neck.
+        calibration.selected=2;frame.controllers[0].squeeze=0;
+        lobby.update(frame,1.f/90);
+        const XMFLOAT4X4 chestInstrument=calibration.weapons[0];
+        frame.controllers[0].gripPose.position[0]+=.20f;
+        lobby.update(frame,1.f/90);
+        if(std::memcmp(&chestInstrument,&calibration.weapons[0],sizeof(chestInstrument)))
+            throw std::runtime_error("Free hand moved the chest-mounted guitar");
+        const XMMATRIX fixedGuitar=XMLoadFloat4x4(&chestInstrument);
+        const XMVECTOR towardHead=XMLoadFloat3(reinterpret_cast<const XMFLOAT3*>(frame.hmdPose.position))-fixedGuitar.r[3];
+        if(XMVectorGetZ(fixedGuitar.r[2])>=0||XMVectorGetX(fixedGuitar.r[1])>=0||
+           XMVectorGetX(XMVector3Dot(fixedGuitar.r[2],towardHead))<=0)
+            throw std::runtime_error("Guitar strings are hidden from the player, face into the chest, or neck flips to the wrong side");
+        auto neckHand=[&](float y,float trigger=0.f,unsigned buttons=0u) {
+            const int wrist=calibration.bone("Lf_Wrist");
+            const XMMATRIX desiredWrist=XMMatrixInverse(nullptr,XMLoadFloat4x4(&calibration.gripWeapon[0]))
+                *XMMatrixTranslation(0,y-.28f,0)*fixedGuitar;
+            const XMMATRIX desiredPalm=calibration.palm(0)*XMLoadFloat4x4(&calibration.bones[wrist].inverse)*desiredWrist;
+            const XMMATRIX grip=XMMatrixInverse(nullptr,XMMatrixScaling(calibration.handScale,calibration.handScale,calibration.handScale)*calibration.palmOffset(0))*desiredPalm;
+            XMVECTOR s,q,t;XMMatrixDecompose(&s,&q,&t,grip);
+            auto& left=frame.controllers[0];
+            XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(left.gripPose.orientation),q);
+            XMStoreFloat3(reinterpret_cast<XMFLOAT3*>(left.gripPose.position),t);
+            left.squeeze=.55f;left.trigger=trigger;left.buttons=buttons;
+            left.activeFlags|=blvr_xr_bridge::ControllerTrigger;
+        };
+        unsigned precedingFret=0;
+        for(float y:{.20f,.40f,.60f}) {
+            neckHand(y);lobby.update(frame,1.f/90);
+            if(!calibration.guitarHeld||std::fabs(calibration.guitarY-y)>.003f||calibration.guitarFret<precedingFret)
+                throw std::runtime_error("Fretting hand did not attach and slide on the real neck");
+            if(std::memcmp(&chestInstrument,&calibration.weapons[0],sizeof(chestInstrument)))
+                throw std::runtime_error("Neck slide displaced the floating instrument");
+            precedingFret=calibration.guitarFret;
+        }
+        neckHand(.40f,1);lobby.update(frame,1.f/90);
+        if(lobby.fretNote()!=1)throw std::runtime_error("Index trigger did not select finger note 1");
+        neckHand(.40f,0,blvr_xr_bridge::ControllerPrimaryClick);lobby.update(frame,1.f/90);
+        if(lobby.fretNote()!=2||calibration.selected!=2)throw std::runtime_error("Middle finger unlatched the guitar");
+        neckHand(.40f,0,blvr_xr_bridge::ControllerSecondaryClick);lobby.update(frame,1.f/90);
+        if(lobby.fretNote()!=3||calibration.selected!=2)throw std::runtime_error("Ring finger unlatched the guitar");
+        frame.controllers[0].squeeze=0;frame.controllers[0].buttons=0;lobby.update(frame,1.f/90);
+        if(lobby.fretting())throw std::runtime_error("Releasing the grip did not free the fretting hand");
+        // Firm grip carries both position and rotation. Release leaves the
+        // instrument in chest coordinates, independent of the free hand.
+        neckHand(.40f);frame.controllers[0].squeeze=1;lobby.update(frame,1.f/90);
+        if(!calibration.guitarMoving)throw std::runtime_error("Firm neck grip did not start repositioning");
+        const XMMATRIX oldGrip=matrix(frame.controllers[0].gripPose);
+        XMMATRIX newGrip=oldGrip*XMMatrixRotationY(.18f);
+        newGrip.r[3]=oldGrip.r[3]+XMVectorSet(.10f,.05f,-.08f,0);
+        XMVECTOR movedScale,movedRotation,movedTranslation;XMMatrixDecompose(&movedScale,&movedRotation,&movedTranslation,newGrip);
+        XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(frame.controllers[0].gripPose.orientation),movedRotation);
+        XMStoreFloat3(reinterpret_cast<XMFLOAT3*>(frame.controllers[0].gripPose.position),movedTranslation);
+        lobby.update(frame,1.f/90);
+        if(!calibration.guitarMoving||length(point(calibration.weapons[0])-point(chestInstrument))<.05f)
+            throw std::runtime_error("Held guitar did not move with the left controller");
+        const auto placed=calibration.weapons[0];
+        const auto placementFile=output/"guitar-placement-fixture.txt";
+        calibration.guitarPlacementFile=placementFile;
+        frame.controllers[0].squeeze=0;lobby.update(frame,1.f/90);
+        if(calibration.guitarMoving||lobby.placementEvent()!=1)
+            throw std::runtime_error("Releasing the guitar did not commit the saved body placement");
+        frame.controllers[0].gripPose.position[0]-=.30f;lobby.update(frame,1.f/90);
+        for(int i=0;i<16;++i)if(std::fabs(reinterpret_cast<const float*>(&placed)[i]-reinterpret_cast<const float*>(&calibration.weapons[0])[i])>.00001f)
+            throw std::runtime_error("Free hand moved the placed guitar");
+        const auto savedPlacement=calibration.guitarPlacement;
+        calibration.guitarPlacementLoaded=false;
+        calibration.loadPlacement(XMMatrixIdentity());
+        for(int i=0;i<16;++i)if(std::fabs(reinterpret_cast<const float*>(&savedPlacement)[i]-reinterpret_cast<const float*>(&calibration.guitarPlacement)[i])>.00001f)
+            throw std::runtime_error("Saved guitar placement did not survive a fresh load");
+        frame.hmdPose.position[0]+=.08f;lobby.update(frame,1.f/90);
+        if(std::fabs(calibration.weapons[0]._41-placed._41-.08f)>.00001f)
+            throw std::runtime_error("Placed guitar did not follow body translation");
+        frame.hmdPose.position[0]-=.08f;
+        std::ofstream(placementFile)<<"BLVR_GUITAR_PLACEMENT_V1 nan broken";
+        calibration.loadPlacement(fixedGuitar*XMMatrixTranslation(0,-1.7f,0));
+        if(!Impl::validPlacement(calibration.guitarPlacement))throw std::runtime_error("Malformed placement did not restore a usable default");
+        std::filesystem::remove(placementFile);calibration.guitarPlacementFile.clear();
+        calibration.guitarPlacementLoaded=false;calibration.guitarHeld=false;lobby.update(frame,1.f/90);
+        frame.controllers[0].gripPose.position[0]=-.28f;frame.controllers[0].gripPose.position[1]=1.25f;frame.controllers[0].gripPose.position[2]=-.38f;
         for(int take=0;take<23;++take) {
             lobby.impl_->selected=take==1?1u:take>=5?(take<14?1u:2u):0u;
             setGripRotation(0,lobby.impl_->selected==2?frettingGrip:uprightGrip);
@@ -1097,6 +1320,7 @@ bool EddieLobby::visualTest(const std::filesystem::path& assets,const std::files
         }
         // Exercise the real input/rig code against the imported geometry.
         auto& rig=*lobby.impl_;rig.action=-1;rig.selected=0;rig.motionValid=false;
+        rig.guitarHeld=false;rig.pendingSelection=rig.lastSelectionButtons=0;
         frame.controllers[0].buttons=blvr_xr_bridge::ControllerPrimaryClick;
         lobby.update(frame,1.f/90);
         frame.controllers[0].buttons=0;lobby.update(frame,1.f/90);
@@ -1124,13 +1348,13 @@ bool EddieLobby::visualTest(const std::filesystem::path& assets,const std::files
         lobby.update(frame,1.f/90,false,0,true);
         frame.controllers[1].trigger=0;
         lobby.update(frame,1.f/90,false,0,false);
-        if(lobby.selectedWeapon()!=2||!rig.equipped[0]||lobby.physicalAction())
+        if(lobby.selectedWeapon()!=2||lobby.physicalAction())
             throw std::runtime_error("Dismount did not restore the held instrument cleanly");
         frame.controllers[1].trigger=0;
         // Attach/release both actual weapon supports, including the axe's
         // optional second hand. Move each controller to the rendered socket.
         rig.yaw=0;rig.navigation={};
-        for(unsigned selected=1;selected<=2;++selected) {
+        for(unsigned selected=1;selected<=1;++selected) {
             rig.selected=selected;rig.action=-1;rig.motionValid=false;rig.supportHeld=false;
             setGripRotation(0,selected==2?frettingGrip:uprightGrip);
             frame.controllers[0].squeeze=frame.controllers[1].squeeze=0;
@@ -1199,14 +1423,23 @@ bool EddieLobby::visualTest(const std::filesystem::path& assets,const std::files
         for(int k=0;k<3;++k)frame.controllers[0].gripPose.position[k]+=XMVectorGetByIndex(across,k);
         lobby.update(frame,1.f/90);
         if(lobby.physicalAction())throw std::runtime_error("Moving only the fretting hand played a guitar note");
-        // A comfortable near-string stroke works while gripping either Touch
-        // controller; solo picking must never latch the right palm to the neck.
+        // A comfortable near-string stroke works while holding the neck with
+        // a soft grip and squeezing the picking controller. Firm left grip is
+        // deliberately reserved for repositioning, which must not play notes.
         rig.action=-1;rig.actionPulseUntil=0;rig.lastPhysicalAction=-10;
-        frame.controllers[0].squeeze=frame.controllers[1].squeeze=1;
+        frame.controllers[0].squeeze=.55f;frame.controllers[1].squeeze=1;
+        frame.controllers[1].activeFlags|=blvr_xr_bridge::ControllerTrigger;
+        frame.controllers[1].trigger=0;
         lobby.update(frame,1.f/90,false,2);
-        for(int i=0;i<3;++i) {fingerAt(-.05f,.23f);rig.motionValid=false;lobby.update(frame,1.f/90,false,2);}
-        fingerAt(.05f,.23f);lobby.update(frame,1.f/90,false,2);
-        if(rig.supportHeld||lobby.physicalAction()!=2)throw std::runtime_error("Near-string solo stroke with both grips did not play");
+        // The string face now points outward; keep the fixture within the
+        // player's actual arm reach, 7.5 cm in front of the string plane.
+        for(int i=0;i<3;++i) {fingerAt(-.05f,.12f);rig.motionValid=false;lobby.update(frame,1.f/90,false,2);}
+        const auto beforeSoloStroke=rig.lastStrum;
+        fingerAt(.05f,.12f);lobby.update(frame,1.f/90,false,2);
+        if(rig.supportHeld||lobby.physicalAction()!=2) {
+            char diagnostic[256]{};sprintf_s(diagnostic,"Near-string solo stroke failed: before=(%.3f %.3f %.3f) after=(%.3f %.3f %.3f) support=%d action=%d",beforeSoloStroke.x,beforeSoloStroke.y,beforeSoloStroke.z,rig.lastStrum.x,rig.lastStrum.y,rig.lastStrum.z,rig.supportHeld,rig.action);
+            throw std::runtime_error(diagnostic);
+        }
         rig.action=-1;rig.selected=0;rig.yaw=0;rig.navigation={};
         frame.controllers[0].squeeze=frame.controllers[1].squeeze=0;
         frame.controllers[1].aimPose.orientation[0]=frame.controllers[1].aimPose.orientation[1]=frame.controllers[1].aimPose.orientation[2]=0;

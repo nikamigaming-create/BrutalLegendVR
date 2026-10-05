@@ -1,9 +1,10 @@
 [CmdletBinding()]
 param(
-    [string]$Version='0.1.0-preview.2',
+    [string]$Version='0.1.0-preview.3',
     [string]$Python='python',
     [string]$DxvkDll,
-    [switch]$SkipSetupBuild
+    [switch]$SkipSetupBuild,
+    [string]$InnoCompiler
 )
 $ErrorActionPreference='Stop'
 . ($PSScriptRoot+'\common.ps1')
@@ -20,7 +21,7 @@ try {
         if (-not (Test-Path -LiteralPath (Join-Path $root $relative) -PathType Leaf)) { throw "Missing reviewed release file: $relative" }
     }
     if (-not $SkipSetupBuild) {
-        & $Python -m PyInstaller --noconfirm --windowed --onedir --name blvr_setup --distpath release-work/setup-dist --workpath release-work/setup-build --specpath release-work scripts/blvr_setup.py
+        & $Python -m PyInstaller --noconfirm --windowed --onedir --name blvr_setup --icon (Join-Path $root 'assets\installer\blvr.ico') --distpath release-work/setup-dist --workpath release-work/setup-build --specpath release-work scripts/blvr_setup.py
         if ($LASTEXITCODE -ne 0) { throw 'Setup packaging failed.' }
     }
     $setupRoot = Join-Path $root 'release-work\setup-dist\blvr_setup'
@@ -49,5 +50,15 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $root 'release') -Force | Out-Null
     & $Python 'scripts\audit_release.py' --stage $stage --version $Version --output (Join-Path $root 'release')
     if ($LASTEXITCODE -ne 0) { throw 'Release audit failed.' }
+    if (-not $InnoCompiler) {
+        $InnoCompiler=Join-Path $root 'release-work\inno\compiler\ISCC.exe'
+        if (-not (Test-Path -LiteralPath $InnoCompiler)) { $InnoCompiler=Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe' }
+    }
+    if (-not (Test-Path -LiteralPath $InnoCompiler -PathType Leaf)) { throw 'Inno Setup 6.6+ is required to build the Windows installer; supply -InnoCompiler.' }
+    & $InnoCompiler ("/DSourceDir="+$stage) ("/DReleaseVersion="+$Version) (Join-Path $root 'scripts\installer.iss')
+    if ($LASTEXITCODE -ne 0) { throw 'Windows installer build failed.' }
+    $installer=Join-Path $root ("release\BrutalLegendVR-"+$Version+"-Setup.exe")
+    $hash=(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLower()
+    [IO.File]::WriteAllText($installer+'.sha256', $hash+'  '+[IO.Path]::GetFileName($installer)+"`n")
     Write-Host "Release staged at $stage"
 } finally { Pop-Location }

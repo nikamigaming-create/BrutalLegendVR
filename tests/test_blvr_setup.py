@@ -1,15 +1,18 @@
 """Control-editor data, atomic saving and hidden Tk events without running the game."""
 import configparser
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
 SPEC = importlib.util.spec_from_file_location('blvr_setup', ROOT / 'scripts/blvr_setup.py')
 setup = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(setup)
@@ -102,6 +105,39 @@ class ControlsEditorTest(unittest.TestCase):
             game = root / 'owned-game'; game.mkdir(); (game / 'BrutalLegend.exe').touch()
             (root / 'settings.json').write_text(setup.json.dumps({'game_dir': str(game)}), encoding='utf-8')
             self.assertEqual(setup.find_game(root), str(game))
+
+    @unittest.skipUnless(os.name == 'nt', 'Tk event test uses the Windows desktop runtime')
+    def test_settings_reset_saved_placement_only_when_requested(self):
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+        native_tk = tk.Tk
+        def hidden_window(*args, **kwargs):
+            window = native_tk(*args, **kwargs); window.withdraw(); return window
+        def children(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from children(child)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            (root/'assets/ui').mkdir(parents=True)
+            (root/'assets/ui/controls-defaults.ini').write_bytes((ROOT/'assets/ui/controls-defaults.ini').read_bytes())
+            (root/'controls.ini').write_bytes((ROOT/'assets/ui/controls-defaults.ini').read_bytes())
+            placement=root/'guitar-placement.txt';placement.write_text('saved body placement')
+            def exercise(window):
+                try:
+                    window.update_idletasks();widgets=list(children(window))
+                    save=next(w for w in widgets if isinstance(w,ttk.Button) and w.cget('text')=='Save VR settings')
+                    reset=next(w for w in widgets if isinstance(w,ttk.Button) and w.cget('text')=='Reset guitar placement')
+                    save.invoke();self.assertTrue(placement.exists())
+                    height=next(w for w in widgets if isinstance(w,ttk.Combobox) and w.get()=='53')
+                    height.set('60');save.invoke()
+                    self.assertEqual(json.loads((root/'settings.json').read_text())['guitar_height_cm'],60)
+                    self.assertFalse(placement.exists())
+                    placement.write_text('new placement');reset.invoke();self.assertFalse(placement.exists())
+                    self.assertEqual(json.loads((root/'settings.json').read_text())['guitar_height_cm'],60)
+                finally:window.destroy()
+            with mock.patch.object(tk,'Tk',side_effect=hidden_window),mock.patch.object(tk.Misc,'mainloop',exercise),mock.patch.object(setup,'find_game',return_value=''),mock.patch.object(messagebox,'showerror',side_effect=AssertionError):
+                setup.gui(root,settings_only=True)
 
     @unittest.skipUnless(os.name == 'nt', 'Tk event test uses the Windows desktop runtime')
     def test_gui_switching_rows_and_search_preserve_pending_edits(self):

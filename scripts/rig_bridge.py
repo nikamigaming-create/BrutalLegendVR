@@ -10,10 +10,10 @@ import os
 import struct
 import time
 
-RIG_MAPPING = r"Local\BLVR_TrackedEddie_v3"
+RIG_MAPPING = r"Local\BLVR_TrackedEddie_v4"
 POSE_MAPPING = r"Local\BLVR_XR_PoseBridge_v1"
-RIG_VERSION = 3
-RIG_FRAME_BYTES = 16592
+RIG_VERSION = 4
+RIG_FRAME_BYTES = 16600
 RIG_HISTORY = 64
 RIG_SKIN_OFFSET = 48
 RIG_WEAPON_OFFSET = RIG_SKIN_OFFSET + 256 * 64
@@ -63,12 +63,13 @@ def parse_rig(data, pose, required_hands=0):
         raise RuntimeError("Tracked rig publication size changed")
     sequence, magic, epoch, frame, display_time, signature, bones, weapon = struct.unpack_from("<IIQQqQII", data)
     controls, action, weight, support, hands, version, size = struct.unpack_from("<QIfIIII", data, RIG_EXTENSION_OFFSET)
+    presentation, fret = struct.unpack_from('<II', data, RIG_EXTENSION_OFFSET + 32)
     if (not sequence or sequence & 1 or magic != 0x47495242 or epoch != pose["epoch"]
             or frame != pose["frame"] or display_time != pose["display_time"]
             or not signature or not controls or not 0 < bones <= 256 or weapon > 2
             or version != RIG_VERSION or size != RIG_FRAME_BYTES or hands > 3
-            or support > 1 or action > 3 or not math.isfinite(weight) or not 0 <= weight <= 1):
-        raise RuntimeError("No exact coherent v3 tracked rig for the current pose")
+            or support > 1 or presentation & ~1 or fret > 24 or action > 3 or not math.isfinite(weight) or not 0 <= weight <= 1):
+        raise RuntimeError("No exact coherent v4 tracked rig for the current pose")
     if required_hands & ~3 or hands & required_hands != required_hands:
         raise RuntimeError("Required controller tracking is unavailable")
     values = struct.unpack_from(f"<{bones * 16}f", data, RIG_SKIN_OFFSET)

@@ -108,6 +108,10 @@ int main() {
     Check(!BLVR::PlayerViewRig_ApplyTracked(bad,headWorld),"reject truncated rig layout");
     bad=rig;bad.trackedHandMask=4;
     Check(!BLVR::PlayerViewRig_ApplyTracked(bad,headWorld),"reject unknown tracking mask");
+    bad=rig;bad.presentationFlags=2;
+    Check(!BLVR::PlayerViewRig_ApplyTracked(bad,headWorld),"reject unknown instrument presentation without a partial edit");
+    bad=rig;bad.guitarFret=25;
+    Check(!BLVR::PlayerViewRig_ApplyTracked(bad,headWorld),"reject malformed fret outside the instrument range");
     bad=rig;bad.skinToHead[7][0]=bad.skinToHead[7][5]=bad.skinToHead[7][10]=0;
     Check(!BLVR::PlayerViewRig_ApplyTracked(bad,headWorld),"reject singular tracked hand transform");
     float badHead[16];std::memcpy(badHead,headWorld,sizeof(badHead));badHead[0]=badHead[5]=badHead[10]=0;
@@ -242,6 +246,10 @@ int main() {
     Check(!BLVR::PlayerViewRig_ReadTracked(65,900,7,received),"reader rejects truncated payload layout");publication.structBytes=sizeof(publication);
     publication.trackedHandMask=4;
     Check(!BLVR::PlayerViewRig_ReadTracked(65,900,7,received),"reader rejects unknown grip validity bits");publication.trackedHandMask=3;
+    publication.presentationFlags=2;
+    Check(!BLVR::PlayerViewRig_ReadTracked(65,900,7,received),"reader rejects unknown presentation bits");publication.presentationFlags=0;
+    publication.guitarFret=25;
+    Check(!BLVR::PlayerViewRig_ReadTracked(65,900,7,received),"reader rejects malformed fret");publication.guitarFret=0;
     publication.sequence=3;
     Check(!BLVR::PlayerViewRig_ReadTracked(65,900,7,received),"reader rejects in-progress publication");
     Check(std::memcmp(&received,&beforeMalformed,sizeof(received))==0,"rejected rig reads preserve caller's exact prior output");
