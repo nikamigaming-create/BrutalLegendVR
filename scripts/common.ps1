@@ -4,6 +4,34 @@ foreach ($blvrModule in @('Microsoft.PowerShell.Management','Microsoft.PowerShel
     Import-Module ($PSHOME+'\Modules\'+$blvrModule+'\'+$blvrModule+'.psd1') -ErrorAction Stop
 }
 
+function Get-BlvrLogsDirectory {
+    foreach ($base in @($env:LOCALAPPDATA,[IO.Path]::GetTempPath())) {
+        if (-not $base) { continue }
+        try {
+            $directory=Join-Path $base 'BrutalLegendVR\Logs'
+            New-Item -ItemType Directory -Path $directory -Force -ErrorAction Stop | Out-Null
+            return $directory
+        } catch { continue }
+    }
+    throw 'Could not create a BLVR logs folder in LocalAppData or TEMP.'
+}
+
+function Start-BlvrLaunchLog {
+    try {
+        $directory=Get-BlvrLogsDirectory
+        Get-ChildItem -LiteralPath $directory -Filter 'preflight-*.log' |
+            Sort-Object LastWriteTime -Descending | Select-Object -Skip 9 |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
+        $path=Join-Path $directory ('preflight-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+$PID+'.log')
+        Start-Transcript -LiteralPath $path -Force -ErrorAction Stop | Out-Null
+        Write-Host "Troubleshooting log: $path"
+        return $true
+    } catch {
+        Write-Warning "Could not save launcher log: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Read-BlvrSettings([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
     try {
@@ -32,6 +60,17 @@ function Set-BlvrPreferences($Settings) {
     $env:BLVR_EDGE_AA=if ($Settings -and $Settings.edge_aa -eq $false) { '0' } else { '1' }
     $env:BLVR_TELEMETRY=if ($Settings -and $Settings.telemetry -eq $true) { '1' } else { '0' }
     $env:BLVR_PERF=if ($Settings -and $Settings.performance_logging -eq $true) { '1' } else { '0' }
+    if ($env:BLVR_TELEMETRY -eq '1' -or $env:BLVR_PERF -eq '1') {
+        $directory=Get-BlvrLogsDirectory
+        $env:BLVR_TELEMETRY_PATH=Join-Path $directory 'blvr_telemetry.jsonl'
+        $env:BLVR_PERF_DIR=$directory
+        # Keep optional per-process profiler history bounded across launches.
+        foreach ($pattern in @('blvr-*-perf-*.csv','blvr-*-gpu-*.csv')) {
+            Get-ChildItem -LiteralPath $directory -Filter $pattern |
+                Sort-Object LastWriteTime -Descending | Select-Object -Skip 6 |
+                ForEach-Object { Remove-Item -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
+        }
+    }
 }
 
 function Invoke-BlvrProgram([string]$Path,[string]$Arguments,[int]$TimeoutSeconds=30) {

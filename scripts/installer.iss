@@ -2,7 +2,7 @@
   #error SourceDir must point to an audited runtime stage.
 #endif
 #ifndef ReleaseVersion
-  #define ReleaseVersion "0.1.0-preview.4"
+  #define ReleaseVersion "0.1.0-preview.5"
 #endif
 [Setup]
 AppId={{C096980B-6910-4A02-B262-EE0D0A71AF1E}
@@ -29,10 +29,12 @@ SolidCompression=yes
 CloseApplications=yes
 CloseApplicationsFilter=blvr_setup.exe,blvr_xr_host.exe
 RestartApplications=no
+SetupLogging=yes
+UninstallLogging=yes
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 UninstallDisplayName=Brütal Legend VR
-VersionInfoVersion=0.1.0.4
+VersionInfoVersion=0.1.0.5
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 [Files]
@@ -42,11 +44,44 @@ Source: "{#SourceDir}\controls.ini"; DestDir: "{app}"; Flags: onlyifdoesntexist 
 Name: "{group}\Brütal Legend VR"; Filename: "{app}\tools\blvr_setup.exe"; WorkingDir: "{app}"; IconFilename: "{app}\assets\installer\blvr.ico"
 Name: "{group}\Play VR"; Filename: "{app}\tools\blvr_setup.exe"; Parameters: "--launch"; WorkingDir: "{app}"; IconFilename: "{app}\assets\installer\blvr.ico"
 Name: "{group}\VR settings"; Filename: "{app}\tools\blvr_setup.exe"; Parameters: "--settings"; WorkingDir: "{app}"; IconFilename: "{app}\assets\installer\blvr.ico"
-Name: "{group}\Uninstall Brütal Legend VR"; Filename: "{uninstallexe}"
+Name: "{group}\Troubleshooting logs"; Filename: "{localappdata}\BrutalLegendVR\Logs"
+Name: "{group}\Uninstall Brütal Legend VR"; Filename: "{uninstallexe}"; Parameters: "/LOG"
 Name: "{autodesktop}\Brütal Legend VR"; Filename: "{app}\tools\blvr_setup.exe"; WorkingDir: "{app}"; IconFilename: "{app}\assets\installer\blvr.ico"; Tasks: desktopicon
 [Run]
 Filename: "{app}\tools\blvr_setup.exe"; Description: "Open Brütal Legend VR to prepare your game"; Flags: nowait postinstall skipifsilent
 [Code]
+procedure SaveSupportLog(const FileName: String);
+var
+  Folder: String;
+begin
+  Folder := ExpandConstant('{localappdata}\BrutalLegendVR\Logs');
+  if ForceDirectories(Folder) then begin
+    if FileExists(Folder + '\' + FileName) then
+      CopyFile(Folder + '\' + FileName, Folder + '\' + FileName + '.previous', False);
+    if not CopyFile(ExpandConstant('{log}'), Folder + '\' + FileName, False) then
+      Log('Could not copy the troubleshooting log. Original: ' + ExpandConstant('{log}'));
+  end;
+end;
+
+procedure InitializeWizard;
+begin
+  WizardForm.WelcomeLabel2.Caption := WizardForm.WelcomeLabel2.Caption + #13#10#13#10 +
+    'Troubleshooting logs are saved automatically, including if you cancel setup.' + #13#10 +
+    ExpandConstant('{localappdata}\BrutalLegendVR\Logs');
+end;
+
+procedure DeinitializeSetup;
+begin
+  Log('Saving installer support log for release {#ReleaseVersion}.');
+  SaveSupportLog('installer-latest.log');
+end;
+
+procedure DeinitializeUninstall;
+begin
+  Log('Saving uninstaller support log.');
+  SaveSupportLog('uninstaller-latest.log');
+end;
+
 function InitializeUninstall: Boolean;
 var
   ResultCode: Integer;

@@ -17,12 +17,14 @@ ASSETS = ART | {'assets/installer/generation-prompt.txt', 'assets/room/basalt-pr
                 'assets/room/README.md', 'assets/ui/controls-defaults.ini',
                 'assets/ui/generation-prompt.txt', 'assets/ui/README.md'}
 ROOT_FILES = {'Play VR.cmd', 'Setup VR.cmd', 'Remap Controls.cmd', 'Uninstall VR.cmd',
+              'Collect Support Logs.cmd',
               'controls.ini', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md'}
 SCRIPTS = {'scripts/launch_vr.ps1', 'scripts/deploy.ps1', 'scripts/uninstall.ps1',
            'scripts/common.ps1'}
 DOCS = {'docs/VR_CONTROLS.md', 'docs/PLAY_VR.md', 'docs/QUEST_HINTS_2026-09-28.md',
+        'docs/TROUBLESHOOTING.md',
         'docs/RELEASE_0.1.0-preview.1.md', 'docs/RELEASE_0.1.0-preview.2.md',
-        'docs/RELEASE_0.1.0-preview.3.md'}
+        'docs/RELEASE_0.1.0-preview.3.md', 'docs/RELEASE_0.1.0-preview.4.md'}
 LICENSES = {'licenses/' + name for name in (
     'MinHook.txt', 'OpenXR.txt', 'JsonCpp.txt', 'DXVK.txt', 'Python.txt', 'Pillow.txt',
     'OpenSSL.txt', 'defusedxml.txt', 'PyInstaller.txt', 'Tcl-Tk.txt', 'PyYAML.txt',

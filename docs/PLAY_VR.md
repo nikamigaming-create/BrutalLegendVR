@@ -35,6 +35,9 @@ saving. See [complete controls](VR_CONTROLS.md) for solos and stage commands.
 
 ## Startup checks
 
+For a failed install or launch, follow the [troubleshooting instructions](TROUBLESHOOTING.md).
+Preview 5 adds automatic logs and **Export support ZIP…** on **Play & setup**.
+
 The app's **VR settings** tab saves your runtime, render resolution, frame
 limit, antialiasing, logging and guitar height/distance/neck angle/string-face angle/volume. Changed
 display and guitar settings apply on the next launch. **Check installation**
@@ -58,4 +61,4 @@ This is a preview. Local Ironheade AI Practice recruitment, stage progression,
 orders and flight have simulator evidence. Physical headset comfort, the
 opening mountain ride, precise particle attachment and a complete RTS battle
 still need player verification.
-See [release validation and limitations](RELEASE_0.1.0-preview.4.md).
+See [release validation and limitations](RELEASE_0.1.0-preview.5.md).

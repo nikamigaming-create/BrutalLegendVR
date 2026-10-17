@@ -6,6 +6,8 @@ $root=Split-Path -Parent $PSScriptRoot
 $proof=Join-Path $root 'artifacts\launcher-lifecycle'
 New-Item -ItemType Directory -Path $proof -Force | Out-Null
 $fixture=Join-Path $proof ([guid]::NewGuid().ToString('N'))
+$originalLocalAppData=$env:LOCALAPPDATA
+$env:LOCALAPPDATA=Join-Path $fixture 'user-data'
 $checks=[Collections.Generic.List[string]]::new()
 $shell=Join-Path $PSHOME 'powershell.exe'
 function Check($condition,[string]$label) {
@@ -96,9 +98,17 @@ class FixtureProgram {
     Check ((@(Get-Process -Name BrutalLegend,blvr_xr_host -ErrorAction SilentlyContinue)).Count -eq 2) 'successful launch leaves its game and host running'
     Check ((Run-Launch 'ready') -ne 0) 'already-running game prevents a second launch'
     Stop-Fixture
+    $logs=Join-Path $env:LOCALAPPDATA 'BrutalLegendVR\Logs'
+    $transcripts=@(Get-ChildItem -LiteralPath $logs -Filter 'preflight-*.log')
+    $combined=($transcripts | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+    Check ($transcripts.Count -ge 1 -and $transcripts.Count -le 10) 'direct launcher retains bounded troubleshooting transcripts'
+    Check ($combined -match 'Invalid controls.ini' -and $combined -match 'OpenXR could not find a connected headset') 'failed preflights persist their actionable errors'
+    Set-BlvrPreferences ([pscustomobject]@{telemetry=$true;performance_logging=$true})
+    Check ($env:BLVR_TELEMETRY_PATH -eq (Join-Path $logs 'blvr_telemetry.jsonl') -and $env:BLVR_PERF_DIR -eq $logs) 'opt-in diagnostic files target a writable user logs folder'
     [IO.File]::WriteAllText((Join-Path $proof 'receipt.json'),(@{passed=$true;checks=$checks.ToArray();native_dependencies='private stub executables; owned real child lifetimes; no game launched'} | ConvertTo-Json -Depth 4))
     Write-Host "PASS: $($checks.Count) launcher lifecycle checks"
 } finally {
+    $env:LOCALAPPDATA=$originalLocalAppData
     Stop-Fixture
     Remove-Item Env:\BLVR_TEST_MODE -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $fixture) {

@@ -10,5 +10,6 @@
 /dist/
 /release/
 /release-work/
+/outputs/
 /settings.json
 /third_party/OpenXR-SDK-Source/

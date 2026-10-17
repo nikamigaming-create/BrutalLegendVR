@@ -10,6 +10,9 @@ import re
 import subprocess
 import sys
 import threading
+import traceback
+
+import blvr_support
 
 SUPPORTED_EXE = '872dc676e8fd77ad3351dd9dfcc99e89353aae0ed9857272a65fd47f298fb0b1'
 INPUTS = ('a b x y left_trigger right_trigger left_grip right_grip '
@@ -120,6 +123,13 @@ def atomic_text(path, text):
 def prepare(root, game, progress=print):
     from import_eddie_assets import import_owned
     from build_eddie_rig import build
+    logger = blvr_support.start_logging(root)
+    notify = progress
+    def progress(text):
+        logger.info('Prepare: %s', text)
+        if notify is not print or sys.stdout:
+            notify(text)
+    logger.info('Preparing game: %s', game)
     game = validate_game(game)
     progress('Importing the model, skeleton and textures from your installation...')
     import_owned(game, root / 'artifacts/eddie-assets', progress)
@@ -234,6 +244,9 @@ def save_controls(root, config):
     try:
         checked = subprocess.run([str(host), '--check-controls'], env=env, capture_output=True,
                                  text=True, timeout=10, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        logger = blvr_support.start_logging(root)
+        blvr_support.log_output(logger, 'Controls validation stdout', checked.stdout)
+        blvr_support.log_output(logger, 'Controls validation stderr', checked.stderr)
         if checked.returncode:
             raise ValueError(checked.stderr.strip() or checked.stdout.strip() or 'The controls file was rejected.')
         os.replace(temporary, root / 'controls.ini')
@@ -241,10 +254,47 @@ def save_controls(root, config):
         temporary.unlink(missing_ok=True)
 
 
+def run_launcher(root, game, check_only=False):
+    logger = blvr_support.start_logging(root)
+    logger.info('%s requested; game=%s', 'Installation check' if check_only else 'Play VR', game)
+    game = validate_game(game)
+    shell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    command_line = [str(shell), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    str(root / 'scripts/launch_vr.ps1'), '-GameDir', str(game)]
+    if check_only:
+        command_line.append('-CheckOnly')
+    try:
+        result = subprocess.run(command_line, cwd=root, capture_output=True, text=True,
+                                encoding='utf-8', errors='replace', timeout=420,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except subprocess.TimeoutExpired as error:
+        blvr_support.log_output(logger, 'Timed-out launcher stdout', error.stdout)
+        blvr_support.log_output(logger, 'Timed-out launcher stderr', error.stderr)
+        raise
+    blvr_support.log_output(logger, 'Launcher stdout', result.stdout)
+    blvr_support.log_output(logger, 'Launcher stderr', result.stderr)
+    logger.info('Launcher exit code: %s', result.returncode)
+    return result.returncode, (result.stdout + '\n' + result.stderr).strip() or 'Ready.'
+
+
+def launcher_summary(detail):
+    lines = detail.splitlines()
+    for marker in ('FATAL:', 'Launch/check failed:', 'Brütal Legend VR started', 'PASS:'):
+        for line in reversed(lines):
+            if marker in line and not line.lstrip().startswith(('+', '<')):
+                return (line.split(marker, 1)[1].strip() if marker.endswith(':') else line.strip())[:500]
+    return next((line.strip()[:500] for line in lines if line.strip()), 'Ready.')
+
+
 def gui(root, controls_only=False, settings_only=False, launch=False):
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
     window = tk.Tk()
+    logger = blvr_support.start_logging(root)
+    def callback_error(kind, error, trace):
+        logger.error('Launcher UI failed', exc_info=(kind, error, trace))
+        messagebox.showerror('BLVR launcher', f'{error}\n\nLogs: {blvr_support.logs_dir()}')
+    window.report_callback_exception = callback_error
     window.title('Brütal Legend VR')
     window.geometry('1040x840')
     window.minsize(900, 780)
@@ -305,6 +355,7 @@ def gui(root, controls_only=False, settings_only=False, launch=False):
         try:
             game = validate_game(game_var.get())
         except Exception as error:
+            logger.exception('Game selection failed')
             messagebox.showerror('Setup', str(error)); return
         prepare_button.configure(state='disabled')
         play_button.configure(state='disabled'); check_button.configure(state='disabled')
@@ -313,29 +364,23 @@ def gui(root, controls_only=False, settings_only=False, launch=False):
                 prepare(root, game, lambda text: events.put(('progress', text)))
                 events.put(('done', 'Preparation complete. Connect your headset and choose Play VR.'))
             except Exception as error:
+                logger.exception('Game preparation failed')
                 events.put(('error', str(error)))
         threading.Thread(target=worker, daemon=True).start()
     prepare_button = ttk.Button(setup, text='Prepare / repair game', command=start_prepare)
     prepare_button.pack(anchor='w')
 
     def launcher_job(check_only=False):
+        selected_game = game_var.get()
         prepare_button.configure(state='disabled')
         play_button.configure(state='disabled'); check_button.configure(state='disabled')
         status.set('Checking your game, controls and OpenXR runtime…' if check_only else 'Starting your headset and game…')
         def worker():
             try:
-                game = validate_game(game_var.get())
-                shell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-                command_line = [str(shell), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-                                str(root / 'scripts/launch_vr.ps1'), '-GameDir', str(game)]
-                if check_only:
-                    command_line.append('-CheckOnly')
-                result = subprocess.run(command_line, cwd=root, capture_output=True, text=True,
-                                        encoding='utf-8', errors='replace', timeout=420,
-                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-                detail = (result.stdout + '\n' + result.stderr).strip()
-                events.put(('error' if result.returncode else 'done', detail or 'Ready.'))
+                code, detail = run_launcher(root, selected_game, check_only)
+                events.put(('error' if code else 'done', launcher_summary(detail)))
             except Exception as error:
+                logger.exception('Installation check failed' if check_only else 'VR launch failed')
                 events.put(('error', str(error)))
         threading.Thread(target=worker, daemon=True).start()
     play_line = ttk.Frame(setup); play_line.pack(fill='x', pady=(24, 12))
@@ -346,8 +391,31 @@ def gui(root, controls_only=False, settings_only=False, launch=False):
     ttk.Label(setup, text='Touch controllers stay in use. Light grip slides on the neck; firm grip places the guitar on your body.\n'
               'Settings are saved here. You can change controller bindings during play.', wraplength=900).pack(anchor='w', pady=12)
     def show_logs():
-        os.startfile(root / 'tools')
-    ttk.Button(setup, text='Open logs folder', command=show_logs).pack(anchor='w')
+        os.startfile(blvr_support.logs_dir())
+    support_line = ttk.Frame(setup); support_line.pack(anchor='w')
+    ttk.Button(support_line, text='Open logs folder', command=show_logs).pack(side='left')
+    def export_logs():
+        destination = filedialog.asksaveasfilename(title='Save BLVR support ZIP',
+            initialfile='BLVR-support.zip', defaultextension='.zip', filetypes=[('Support ZIP', '*.zip')])
+        if not destination:
+            return
+        selected_game = game_var.get()
+        export_button.configure(state='disabled')
+        status.set('Collecting logs and system details…')
+        def worker():
+            try:
+                logger.info('Exporting support ZIP')
+                path = blvr_support.export_support(root, selected_game, destination)
+                events.put(('support', str(path)))
+            except Exception as error:
+                logger.exception('Support export failed')
+                events.put(('support_error', str(error)))
+        threading.Thread(target=worker, daemon=True).start()
+    export_button = ttk.Button(support_line, text='Export support ZIP…', command=export_logs)
+    export_button.pack(side='left', padx=12)
+    ttk.Label(setup, text='Having trouble? Check installation, reproduce the problem, then export the ZIP to send with your report.\n'
+              'It contains launcher, installer and game logs plus settings and system details. Review it before sharing.',
+              wraplength=900).pack(anchor='w', pady=10)
 
     defaults = controls_config(root / 'assets/ui/controls-defaults.ini')
     try:
@@ -478,8 +546,25 @@ def gui(root, controls_only=False, settings_only=False, launch=False):
 
     import blvr_settings
     preferences = blvr_settings.load(root)
-    settings_tab = ttk.Frame(tabs, padding=18)
-    tabs.insert(1, settings_tab, text='VR settings')
+    settings_page = ttk.Frame(tabs, padding=18)
+    tabs.insert(1, settings_page, text='VR settings')
+    settings_footer = ttk.Frame(settings_page)
+    settings_footer.pack(side='bottom', fill='x')
+    settings_body = ttk.Frame(settings_page)
+    settings_body.pack(fill='both', expand=True)
+    settings_canvas = tk.Canvas(settings_body, bg='#18181d', highlightthickness=0)
+    settings_scroll = ttk.Scrollbar(settings_body, command=settings_canvas.yview)
+    settings_scroll.pack(side='right', fill='y')
+    settings_canvas.pack(side='left', fill='both', expand=True)
+    settings_canvas.configure(yscrollcommand=settings_scroll.set)
+    settings_tab = ttk.Frame(settings_canvas)
+    settings_content = settings_canvas.create_window((0, 0), window=settings_tab, anchor='nw')
+    settings_tab.bind('<Configure>', lambda _: settings_canvas.configure(scrollregion=settings_canvas.bbox('all')))
+    settings_canvas.bind('<Configure>', lambda event: settings_canvas.itemconfigure(settings_content, width=event.width))
+    def scroll_settings(event):
+        if tabs.select() == str(settings_page):
+            settings_canvas.yview_scroll(-int(event.delta / 120), 'units')
+    window.bind('<MouseWheel>', scroll_settings, add='+')
     ttk.Label(settings_tab, text='Headset, performance and guitar', font=('Segoe UI', 17, 'bold')).pack(anchor='w', pady=(0, 14))
     fields = {}
     runtime_line = ttk.Frame(settings_tab); runtime_line.pack(fill='x', pady=8)
@@ -507,12 +592,14 @@ def gui(root, controls_only=False, settings_only=False, launch=False):
         ttk.Label(row, text=label, width=29).pack(side='left')
         variable = tk.StringVar(value=str(preferences[key])); fields[key] = variable
         ttk.Combobox(row, textvariable=variable, values=choices, width=14).pack(side='left')
-    for key, label in [('edge_aa', 'Smooth edges'), ('telemetry', 'Diagnostic telemetry'),
+    for key, label in [('edge_aa', 'Smooth edges'), ('telemetry', 'Detailed troubleshooting logs'),
                        ('performance_logging', 'Performance logging')]:
         variable = tk.BooleanVar(value=preferences[key]); fields[key] = variable
         ttk.Checkbutton(settings_tab, text=label, variable=variable).pack(anchor='w', pady=4)
+    ttk.Label(settings_tab, text='Basic launcher and installer logs are always saved. For a difficult issue, enable detailed logs,\n'
+              'save settings and reproduce it on the next launch. Export the support ZIP from Play & setup.', wraplength=900).pack(anchor='w', pady=4)
     preferences_status = tk.StringVar(value='VR settings apply on your next launch. Controls reload during play.')
-    ttk.Label(settings_tab, textvariable=preferences_status, wraplength=900).pack(anchor='w', pady=12)
+    ttk.Label(settings_footer, textvariable=preferences_status, wraplength=900).pack(anchor='w', pady=12)
     def save_preferences():
         try:
             saved = blvr_settings.save(root, {key: variable.get() for key, variable in fields.items()})
@@ -522,8 +609,9 @@ def gui(root, controls_only=False, settings_only=False, launch=False):
             preferences.update(saved)
             preferences_status.set('Saved. Launch VR to use these settings.')
         except Exception as error:
+            logger.exception('Saving VR settings failed')
             messagebox.showerror('VR settings', str(error))
-    buttons = ttk.Frame(settings_tab); buttons.pack(anchor='w')
+    buttons = ttk.Frame(settings_footer); buttons.pack(anchor='w')
     ttk.Button(buttons, text='Save VR settings', style='Primary.TButton', command=save_preferences).pack(side='left')
     def reset_placement():
         try:
@@ -533,7 +621,7 @@ def gui(root, controls_only=False, settings_only=False, launch=False):
             messagebox.showerror('Guitar placement', str(error))
     ttk.Button(buttons, text='Reset guitar placement', command=reset_placement).pack(side='left', padx=12)
     if settings_only:
-        tabs.select(settings_tab)
+        tabs.select(settings_page)
     if launch:
         window.after(350, launcher_job)
     def close():
@@ -555,7 +643,15 @@ def gui(root, controls_only=False, settings_only=False, launch=False):
                 prepare_button.configure(state='normal')
                 play_button.configure(state='normal'); check_button.configure(state='normal')
             if kind == 'error':
-                messagebox.showerror('Setup', text)
+                status.set('The operation failed. Export a support ZIP to include the full details.')
+                messagebox.showerror('Setup', text + '\n\nUse Export support ZIP on Play & setup to collect the logs.')
+            if kind in ('support', 'support_error'):
+                export_button.configure(state='normal')
+                if kind == 'support':
+                    status.set('Support ZIP saved: ' + text)
+                    messagebox.showinfo('Support ZIP saved', text + '\n\nReview the ZIP, then send it with the issue description. Nothing was uploaded.')
+                else:
+                    messagebox.showerror('Support ZIP', text)
         window.after(100, poll)
     poll(); window.mainloop()
 
@@ -569,9 +665,18 @@ def main():
     parser.add_argument('--settings', action='store_true')
     parser.add_argument('--launch', action='store_true')
     parser.add_argument('--check-assets', action='store_true')
+    parser.add_argument('--export-support', type=Path, metavar='ZIP', help='Export logs without opening the launcher')
     args = parser.parse_args()
     root = (args.root or project_root()).resolve()
-    if args.check_assets:
+    logger = blvr_support.start_logging(root)
+    logger.info('Mode: prepare=%s check_assets=%s launch=%s export=%s',
+                args.prepare, args.check_assets, args.launch, bool(args.export_support))
+    if args.export_support:
+        path = blvr_support.export_support(root, args.game_dir or find_game(root), args.export_support)
+        logger.info('Support ZIP saved: %s', path)
+        if sys.stdout:
+            print(path)
+    elif args.check_assets:
         from blvr_assets_check import validate
         result=validate(root)
         if sys.stdout:print('PASS: owned model and textures',result)
@@ -588,11 +693,15 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
+        detail = traceback.format_exc()
+        try:
+            blvr_support.start_logging(project_root()).error('BLVR setup failed\n%s', detail)
+            detail_path = str(blvr_support.logs_dir())
+        except OSError:
+            detail_path = 'No writable log directory; copy this error message.'
         if sys.stderr:
-            print(f'BLVR setup failed: {error}', file=sys.stderr)
-        elif '--prepare' in sys.argv or '--check-assets' in sys.argv:
-            project_root().joinpath('tools/blvr_setup-error.log').write_text(str(error), encoding='utf-8')
-        else:
+            print(f'BLVR setup failed: {detail}\nLogs: {detail_path}', file=sys.stderr)
+        elif not any(flag in sys.argv for flag in ('--prepare', '--check-assets', '--export-support')):
             import tkinter.messagebox
-            tkinter.messagebox.showerror('BLVR setup', str(error))
+            tkinter.messagebox.showerror('BLVR setup', f'{error}\n\nLogs: {detail_path}')
         sys.exit(1)

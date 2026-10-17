@@ -7,6 +7,7 @@ $hostExe = Join-Path $projectRoot 'tools\blvr_xr_host.exe'
 $setupExe = Join-Path $projectRoot 'tools\blvr_setup.exe'
 $settingsPath = Join-Path $projectRoot 'settings.json'
 $launchLock=$null;$launchMutex=$null;$mutexOwned=$false;$hostProcess=$null;$game=$null;$started=$false
+$transcriptStarted=Start-BlvrLaunchLog
 try {
     $launchMutex=[Threading.Mutex]::new($false,'Local\BrutalLegendVR_Launcher_v1')
     try { $mutexOwned=$launchMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $mutexOwned=$true }
@@ -69,7 +70,7 @@ if (-not $cacheInvalid -and (Test-Path -LiteralPath $setupExe)) { $cacheInvalid=
 if ($cacheInvalid -or -not $settings -or $settings.game_dir -ne $GameDir) {
     if (-not (Test-Path -LiteralPath $setupExe)) { throw 'Prepare your owned model with Setup VR.cmd first.' }
     Write-Host 'Preparing your model from the installation. No animation recording is needed.'
-    if ((Invoke-BlvrProgram $setupExe ('--prepare --game-dir "'+$GameDir+'"') 180) -ne 0) { throw 'Model preparation failed. Open the app and choose Prepare / repair game. See tools\blvr_setup-error.log for details.' }
+    if ((Invoke-BlvrProgram $setupExe ('--prepare --game-dir "'+$GameDir+'"') 180) -ne 0) { throw 'Model preparation failed. Open the app, choose Prepare / repair game, then Export support ZIP for details.' }
 }
 & (Join-Path $PSScriptRoot 'deploy.ps1') -GameDir $GameDir
 $env:BLVR_XR_BRIDGE='1'; $env:BLVR_SIM='0'; $env:BLVR_AUTOMATION='0'; $env:BLVR_RECORD='0'
@@ -103,9 +104,13 @@ Start-Sleep -Seconds 3
 if ($game.HasExited -or $hostProcess.HasExited) { throw "Game or VR host exited during startup. Check the host log and $GameDir\blvr.log." }
 $started=$true
 Write-Host "Brütal Legend VR started (game PID $($game.Id)). Put on your connected headset."
+} catch {
+    Write-Host ("Launch/check failed: "+($_ | Out-String))
+    throw
 } finally {
     if ($game -and -not $started -and -not $game.HasExited) { $game.Kill();$game.WaitForExit(5000) | Out-Null }
     if ($hostProcess -and -not $started -and -not $hostProcess.HasExited) { $hostProcess.Kill();$hostProcess.WaitForExit(5000) | Out-Null }
     if ($launchLock) { $launchLock.Dispose() }
     if ($launchMutex) { if ($mutexOwned) { $launchMutex.ReleaseMutex() };$launchMutex.Dispose() }
+    if ($transcriptStarted) { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null }
 }

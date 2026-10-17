@@ -4,19 +4,21 @@ A Windows OpenXR mod by Nikami for the Steam PC version of Brütal Legend.
 First-person stereo gameplay, tracked Eddie hands and equipment, physical axe
 swings and guitar strokes, forearm menus, and guitar-mounted solo UI.
 
-**[Download 0.1.0-preview.4](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.4), an experimental testing release.** This launcher patch fixes the
-OpenXR version mismatch between preflight and gameplay. Automatic runtime
-selection now prefers Meta Quest Link / Air Link when installed; an explicitly
-selected runtime still takes precedence. The installer, saved VR settings and
-chest-mounted Touch guitar from preview 3 are included. Its guitar and RTS
-simulator recordings remain available in the [preview 3 release](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.3).
+**[Download 0.1.0-preview.5](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.5), an experimental testing release.** The launcher and Windows installer now save
+troubleshooting logs automatically. **Export support ZIP…** packages the logs
+for your report, with **Collect Support Logs.cmd** as a fallback if the launcher
+cannot open. Watch the [1:51 launch and logging guide](https://github.com/nikamigaming-create/BrutalLegendVR/releases/download/v0.1.0-preview.5/BLVR-support-guide.mp4)
+([captions](https://github.com/nikamigaming-create/BrutalLegendVR/releases/download/v0.1.0-preview.5/BLVR-support-guide.srt)).
+The OpenXR startup fixes, saved VR settings and chest-mounted Touch guitar from
+earlier previews are included. Guitar and RTS simulator recordings remain
+available in the [preview 3 release](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.3).
 Physical headset acceptance, complete battles, all lighting/shader effects,
 other factions, online play and the full campaign remain unverified. See the
-[release validation notes](docs/RELEASE_0.1.0-preview.4.md).
+[release validation notes](docs/RELEASE_0.1.0-preview.5.md).
 
 ## Install and play
 
-Use **BrutalLegendVR-0.1.0-preview.4-Setup.exe** for a per-user installation
+Use **BrutalLegendVR-0.1.0-preview.5-Setup.exe** for a per-user installation
 with Start menu shortcuts and an integrated Play, settings and controls app.
 The portable ZIP includes the same runtime and its dependencies; Python is
 not required to play.
@@ -111,7 +113,7 @@ panels appear only when their rendered geometry matches both submitted eyes;
 they are withheld while that matching data is unavailable.
 
 See [complete controls](docs/VR_CONTROLS.md) and
-[preview validation and known issues](docs/RELEASE_0.1.0-preview.4.md).
+[preview validation and known issues](docs/RELEASE_0.1.0-preview.5.md).
 
 ![Default Touch controls](assets/ui/default-controls.png)
 
@@ -119,6 +121,12 @@ Defaults are shown above; all 71 controls can be remapped live. Keep the full
 command chord and A held while choosing and using the build wheel.
 
 ## Troubleshooting
+
+Preview 5 adds **Export support ZIP…** on **Play & setup**, automatic launcher
+and installer logs, and **Collect Support Logs.cmd** for a launcher window that
+will not open. Enable **Detailed troubleshooting logs** in VR settings, save,
+reproduce the issue, then export the ZIP to send with the exact failure step.
+See [tester instructions, installer logging for older releases, and what to send](docs/TROUBLESHOOTING.md).
 
 Use the VR launcher to start both processes. If the headset remains blank,
 check the connection, wake both controllers, and read
