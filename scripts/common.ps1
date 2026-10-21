@@ -32,6 +32,20 @@ function Start-BlvrLaunchLog {
     }
 }
 
+function Get-BlvrActiveRuntime {
+    # The host is x64 even when the launcher was started by a 32-bit shell.
+    $base=$null;$key=$null
+    try {
+        $base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)
+        $key=$base.OpenSubKey('SOFTWARE\Khronos\OpenXR\1')
+        if ($key) { return [string]$key.GetValue('ActiveRuntime','') }
+    } finally {
+        if ($key) { $key.Dispose() }
+        if ($base) { $base.Dispose() }
+    }
+    return ''
+}
+
 function Read-BlvrSettings([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
     try {

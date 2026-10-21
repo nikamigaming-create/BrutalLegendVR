@@ -22,19 +22,18 @@ if (-not $GameDir) { throw 'Select your installation using Setup VR.cmd first.' 
 $GameDir=(Resolve-Path -LiteralPath $GameDir).Path
 $gameExe=Join-Path $GameDir 'BrutalLegend.exe'
 if ((Get-FileHash -LiteralPath $gameExe -Algorithm SHA256).Hash -ne '872DC676E8FD77AD3351DD9DFCC99E89353AAE0ED9857272A65FD47F298FB0B1') { throw 'Unsupported game executable. This preview supports the tested Steam PC build.' }
-if (-not $RuntimeJson -and $settings -and $settings.runtime_json) { $RuntimeJson=$settings.runtime_json }
+$runtimeSource='command line'
+if (-not $RuntimeJson -and $settings -and $settings.runtime_json) { $RuntimeJson=$settings.runtime_json; $runtimeSource='saved BLVR preference' }
+if (-not $RuntimeJson -and $env:XR_RUNTIME_JSON) { $RuntimeJson=$env:XR_RUNTIME_JSON; $runtimeSource='XR_RUNTIME_JSON environment' }
 if (-not $RuntimeJson) {
-    $meta=Join-Path $env:ProgramFiles 'Oculus\Support\oculus-runtime\oculus_openxr_64.json'
-    if (Test-Path -LiteralPath $meta -PathType Leaf) { $RuntimeJson=$meta }
-    else {
-        $active=(Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Khronos\OpenXR\1' -Name ActiveRuntime -ErrorAction SilentlyContinue).ActiveRuntime
-        if ($active -and $active -notmatch 'simulator|elliott') { $RuntimeJson=$active }
-    }
+    $RuntimeJson=Get-BlvrActiveRuntime
+    $runtimeSource='system OpenXR selection'
+    if ($RuntimeJson -match 'simulator|elliott') { throw 'The system OpenXR runtime is a simulator. Choose your headset runtime in VR settings.' }
 }
 if ($RuntimeJson) {
     if (-not (Test-Path -LiteralPath $RuntimeJson -PathType Leaf)) { throw "OpenXR runtime file not found: $RuntimeJson" }
     $env:XR_RUNTIME_JSON=$RuntimeJson
-    Write-Host "OpenXR runtime: $RuntimeJson"
+    Write-Host "OpenXR runtime: $RuntimeJson ($runtimeSource)"
 } else { Write-Host 'Using the system OpenXR runtime.' }
 $env:BLVR_CONTROLS_FILE=Join-Path $projectRoot 'controls.ini'
 Set-BlvrPreferences $settings
@@ -53,7 +52,7 @@ if (-not $CheckOnly) {
     }
 }
 if ((Invoke-BlvrProgram $hostExe '--check-controls' 10) -ne 0) { throw 'Invalid controls.ini. Open the app Controls tab and restore a working layout.' }
-if ((Invoke-BlvrProgram $hostExe '--check-runtime' 30) -ne 0) { throw 'OpenXR could not find a connected headset. Start Quest Link / Air Link, wake your headset, and choose its runtime in VR settings. See the message above.' }
+if ((Invoke-BlvrProgram $hostExe '--check-runtime' 30) -ne 0) { throw 'OpenXR preflight failed. Match VR settings to your connection: Virtual Desktop uses VDXR (or SteamVR); Steam Link uses SteamVR; Quest Link / Air Link uses Meta. Connect and wake the headset before retrying. See the runtime path and error above.' }
 $rig=Join-Path $projectRoot 'artifacts\eddie-rig\eddie.rigcache'
 if ($CheckOnly) {
     if (-not (Test-Path -LiteralPath $rig -PathType Leaf)) { throw "Owned model missing: $rig. Run Setup VR.cmd first." }

@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][string]$Stage)
+param([Parameter(Mandatory=$true)][string]$Stage, [string]$Version='0.1.0-preview.6')
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'scripts\common.ps1')
@@ -28,7 +28,7 @@ end;
 $source=Join-Path $proof 'installer-test.iss'
 [IO.File]::WriteAllText($source,$script,[Text.UTF8Encoding]::new($true))
 $compiler=Join-Path $root 'release-work\inno\compiler\ISCC.exe'
-& $compiler ('/DSourceDir='+$Stage) '/DReleaseVersion=0.1.0-preview.5' ('/O'+$proof) '/Finstaller-test' $source *> (Join-Path $proof 'compile.log')
+& $compiler ('/DSourceDir='+$Stage) ('/DReleaseVersion='+$Version) ('/O'+$proof) '/Finstaller-test' $source *> (Join-Path $proof 'compile.log')
 if ($LASTEXITCODE -ne 0) { throw ('Installer test compilation failed; see '+(Join-Path $proof 'compile.log')) }
 $setup=Join-Path $proof 'installer-test.exe'
 $checks=[Collections.Generic.List[string]]::new()

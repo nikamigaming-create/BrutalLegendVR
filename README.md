@@ -4,7 +4,9 @@ A Windows OpenXR mod by Nikami for the Steam PC version of Brütal Legend.
 First-person stereo gameplay, tracked Eddie hands and equipment, physical axe
 swings and guitar strokes, forearm menus, and guitar-mounted solo UI.
 
-**[Download 0.1.0-preview.5](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.5), an experimental testing release.** The launcher and Windows installer now save
+**[Download 0.1.0-preview.6](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.6), an experimental testing release.** VR settings now discover Virtual Desktop (VDXR), SteamVR and Meta runtimes. Automatic selection respects your configured runtime. A local user test reports VDXR working; SteamVR headset testing remains pending.
+
+The launcher and Windows installer save
 troubleshooting logs automatically. **Export support ZIP…** packages the logs
 for your report, with **Collect Support Logs.cmd** as a fallback if the launcher
 cannot open. Watch the [1:51 launch and logging guide](https://github.com/nikamigaming-create/BrutalLegendVR/releases/download/v0.1.0-preview.5/BLVR-support-guide.mp4)
@@ -14,11 +16,11 @@ earlier previews are included. Guitar and RTS simulator recordings remain
 available in the [preview 3 release](https://github.com/nikamigaming-create/BrutalLegendVR/releases/tag/v0.1.0-preview.3).
 Physical headset acceptance, complete battles, all lighting/shader effects,
 other factions, online play and the full campaign remain unverified. See the
-[release validation notes](docs/RELEASE_0.1.0-preview.5.md).
+[release validation notes](docs/RELEASE_0.1.0-preview.6.md).
 
 ## Install and play
 
-Use **BrutalLegendVR-0.1.0-preview.5-Setup.exe** for a per-user installation
+Use **BrutalLegendVR-0.1.0-preview.6-Setup.exe** for a per-user installation
 with Start menu shortcuts and an integrated Play, settings and controls app.
 The portable ZIP includes the same runtime and its dependencies; Python is
 not required to play.
@@ -138,9 +140,15 @@ For a preflight without launching the game:
 ```
 
 Select another installed 64-bit OpenXR runtime for a launch with
-`-RuntimeJson "C:\path\to\runtime.json"`. Automatic selection prefers the
-installed Meta Quest Link / Air Link runtime, then the registered headset
-runtime. A saved runtime selection overrides that automatic choice.
+`-RuntimeJson "C:\path\to\runtime.json"`. Automatic selection respects
+`XR_RUNTIME_JSON` when set, otherwise the registered 64-bit OpenXR runtime.
+A saved runtime selection overrides Automatic; the command-line option overrides both.
+For Virtual Desktop, connect to your PC and select its VDXR runtime
+(`virtualdesktop-openxr.json`) in VR settings, or select SteamVR if using that route.
+For Steam Link, select SteamVR. For Quest Link / Air Link, select Meta.
+BLVR does not change the system runtime. A local user test reports VDXR working;
+the full runtime checklist and SteamVR physical-headset acceptance remain pending.
+See the [runtime test procedure](docs/RUNTIME_TESTING.md).
 Other controller profiles are not yet verified.
 
 If wrist or guitar panels disappear, check tracking and the host log for

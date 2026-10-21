@@ -58,8 +58,7 @@ def validate_runtime(path):
 
 
 def runtimes():
-    candidates = [str(Path(os.environ.get('ProgramFiles', 'C:/Program Files')) /
-                      'Oculus/Support/oculus-runtime/oculus_openxr_64.json')]
+    candidates = [os.environ.get('XR_RUNTIME_JSON', '')]
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Khronos\OpenXR\1',
@@ -67,11 +66,45 @@ def runtimes():
             candidates.append(winreg.QueryValueEx(handle, 'ActiveRuntime')[0])
     except (ImportError, OSError):
         pass
+    program_files = Path(os.environ.get('ProgramW6432') or os.environ.get('ProgramFiles', 'C:/Program Files'))
+    candidates.extend(str(program_files / relative) for relative in (
+        'Virtual Desktop Streamer/OpenXR/virtualdesktop-openxr.json',
+        'Oculus/Support/oculus-runtime/oculus_openxr_64.json',
+    ))
+    candidates.append(str(Path(os.environ.get('ProgramFiles(x86)', 'C:/Program Files (x86)')) /
+                          'Steam/steamapps/common/SteamVR/steamxr_win64.json'))
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Khronos\OpenXR\1\AvailableRuntimes',
+                            0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as handle:
+            index = 0
+            while True:
+                try:
+                    path, disabled, _ = winreg.EnumValue(handle, index)
+                except OSError:
+                    break
+                if disabled == 0:
+                    candidates.append(path)
+                index += 1
+    except (NameError, ImportError, OSError):
+        pass
     found = []
+    seen = set()
     for candidate in candidates:
-        if candidate and candidate not in found and Path(candidate).is_file():
+        if candidate and candidate.casefold() not in seen and Path(candidate).is_file():
             found.append(candidate)
+            seen.add(candidate.casefold())
     return found
+
+
+def runtime_label(path):
+    name = Path(path).name.lower()
+    if name == 'virtualdesktop-openxr.json':
+        return 'Virtual Desktop (VDXR)'
+    if name == 'steamxr_win64.json':
+        return 'SteamVR'
+    if name == 'oculus_openxr_64.json':
+        return 'Meta Quest Link / Air Link'
+    return 'OpenXR runtime'
 
 
 def save(root, values):

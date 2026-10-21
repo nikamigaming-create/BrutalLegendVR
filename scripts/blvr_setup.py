@@ -569,16 +569,22 @@ def gui(root, controls_only=False, settings_only=False, launch=False):
     fields = {}
     runtime_line = ttk.Frame(settings_tab); runtime_line.pack(fill='x', pady=8)
     ttk.Label(runtime_line, text='OpenXR runtime', width=24).pack(side='left')
-    runtime_var = tk.StringVar(value=preferences['runtime_json'])
-    ttk.Combobox(runtime_line, textvariable=runtime_var, values=[''] + blvr_settings.runtimes(), width=64).pack(side='left', fill='x', expand=True)
+    runtime_choices = {'Automatic (configured OpenXR runtime)': ''}
+    for path in blvr_settings.runtimes():
+        runtime_choices[f'{blvr_settings.runtime_label(path)} — {path}'] = path
+    runtime_value = preferences['runtime_json']
+    runtime_var = tk.StringVar(value=next((label for label, path in runtime_choices.items()
+                                         if path == runtime_value), runtime_value))
+    ttk.Combobox(runtime_line, textvariable=runtime_var, values=list(runtime_choices), width=64).pack(side='left', fill='x', expand=True)
     fields['runtime_json'] = runtime_var
     def browse_runtime():
         selected_runtime = filedialog.askopenfilename(title='Select a 64-bit OpenXR runtime JSON', filetypes=[('OpenXR runtime', '*.json')])
         if selected_runtime:
             runtime_var.set(selected_runtime)
     ttk.Button(runtime_line, text='Browse…', command=browse_runtime).pack(side='right', padx=(8, 0))
-    ttk.Label(settings_tab, text='Automatic prefers Meta Quest Link / Air Link when installed. Choose another runtime to override it.\n'
-              'This setting applies to BLVR.', wraplength=900).pack(anchor='w', pady=(0, 12))
+    ttk.Label(settings_tab, text='Automatic uses XR_RUNTIME_JSON when set, otherwise the system OpenXR runtime.\n'
+              'Virtual Desktop: choose virtualdesktop-openxr.json (VDXR), or SteamVR. Steam Link: choose SteamVR.\n'
+              'Quest Link / Air Link: choose Meta. This setting applies to BLVR only.', wraplength=900).pack(anchor='w', pady=(0, 12))
     for key, label, choices in [
         ('render_resolution', 'Pixels per eye', [1024, 1280, 1536, 1792, 2048]),
         ('frame_limit_fps', 'Game frame limit', [72, 80, 90, 120, 144]),
@@ -602,7 +608,9 @@ def gui(root, controls_only=False, settings_only=False, launch=False):
     ttk.Label(settings_footer, textvariable=preferences_status, wraplength=900).pack(anchor='w', pady=12)
     def save_preferences():
         try:
-            saved = blvr_settings.save(root, {key: variable.get() for key, variable in fields.items()})
+            values = {key: variable.get() for key, variable in fields.items()}
+            values['runtime_json'] = runtime_choices.get(values['runtime_json'], values['runtime_json'])
+            saved = blvr_settings.save(root, values)
             geometry = ('guitar_height_cm', 'guitar_distance_cm', 'guitar_angle_degrees', 'guitar_face_degrees')
             if any(saved[key] != preferences[key] for key in geometry):
                 (root / 'guitar-placement.txt').unlink(missing_ok=True)

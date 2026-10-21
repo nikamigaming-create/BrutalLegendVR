@@ -3276,8 +3276,10 @@ int main(int argc, char** argv)
             XrSystemId system=XR_NULL_SYSTEM_ID;
             const XrResult found=xrGetSystem(instance,&systemInfo,&system);
             XrInstanceProperties properties{XR_TYPE_INSTANCE_PROPERTIES};
-            xrGetInstanceProperties(instance,&properties);xrDestroyInstance(instance);
-            if(XR_FAILED(found))throw std::runtime_error("Headset unavailable ("+std::to_string(found)+"). Connect Quest Link / Air Link and wake the headset.");
+            const XrResult identified=xrGetInstanceProperties(instance,&properties);
+            if(XR_SUCCEEDED(identified))logger->write(std::string("Preflight runtime: ")+properties.runtimeName);
+            xrDestroyInstance(instance);
+            if(XR_FAILED(found))throw std::runtime_error("Headset query failed ("+std::to_string(found)+"). Connect and wake the headset through the selected runtime. Virtual Desktop: VDXR or SteamVR; Steam Link: SteamVR; Quest Link / Air Link: Meta.");
             std::cout<<"PASS: OpenXR runtime "<<properties.runtimeName<<" and connected headset\n";return 0;
         }
         if (hasArgument(argc, argv, "--self-test"))

@@ -2,7 +2,7 @@
   #error SourceDir must point to an audited runtime stage.
 #endif
 #ifndef ReleaseVersion
-  #define ReleaseVersion "0.1.0-preview.5"
+  #define ReleaseVersion "0.1.0-preview.6"
 #endif
 [Setup]
 AppId={{C096980B-6910-4A02-B262-EE0D0A71AF1E}

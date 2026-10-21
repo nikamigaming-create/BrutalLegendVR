@@ -19,11 +19,14 @@ function Run-Launch([string]$mode,[bool]$checkOnly=$false) {
     $arguments=Encoded ('& '''+(Join-Path $fixture 'scripts\launch_vr.ps1')+''' -GameDir '''+(Join-Path $fixture 'game')+''' -RuntimeJson '''+(Join-Path $fixture 'runtime.json')+''' '+$(if($checkOnly){'-CheckOnly'}))
     return Invoke-BlvrProgram $shell $arguments 20
 }
+function Get-FixtureProcess {
+    Get-Process -Name BrutalLegend,blvr_xr_host -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and $_.Path.StartsWith($fixture+'\',[StringComparison]::OrdinalIgnoreCase)
+    }
+}
 function Stop-Fixture {
-    foreach ($process in (Get-Process -Name BrutalLegend,blvr_xr_host -ErrorAction SilentlyContinue)) {
-        if ($process.Path -and $process.Path.StartsWith($fixture+'\',[StringComparison]::OrdinalIgnoreCase)) {
-            $process.Kill();$process.WaitForExit(5000) | Out-Null
-        }
+    foreach ($process in (Get-FixtureProcess)) {
+        $process.Kill();$process.WaitForExit(5000) | Out-Null
     }
 }
 try {
@@ -92,17 +95,17 @@ class FixtureProgram {
         Stop-Fixture
         [IO.File]::WriteAllText($log,"PoseBridge: READY`n")
         Check ((Run-Launch $mode) -ne 0) ($mode+' fails safely')
-        Check (-not (Get-Process -Name BrutalLegend,blvr_xr_host -ErrorAction SilentlyContinue)) ($mode+' leaves no fixture child running')
+        Check (-not (Get-FixtureProcess)) ($mode+' leaves no fixture child running')
     }
     Check ((Run-Launch 'ready') -eq 0) 'successful startup reports success only after both children survive'
-    Check ((@(Get-Process -Name BrutalLegend,blvr_xr_host -ErrorAction SilentlyContinue)).Count -eq 2) 'successful launch leaves its game and host running'
+    Check ((@(Get-FixtureProcess)).Count -eq 2) 'successful launch leaves its game and host running'
     Check ((Run-Launch 'ready') -ne 0) 'already-running game prevents a second launch'
     Stop-Fixture
     $logs=Join-Path $env:LOCALAPPDATA 'BrutalLegendVR\Logs'
     $transcripts=@(Get-ChildItem -LiteralPath $logs -Filter 'preflight-*.log')
     $combined=($transcripts | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
     Check ($transcripts.Count -ge 1 -and $transcripts.Count -le 10) 'direct launcher retains bounded troubleshooting transcripts'
-    Check ($combined -match 'Invalid controls.ini' -and $combined -match 'OpenXR could not find a connected headset') 'failed preflights persist their actionable errors'
+    Check ($combined -match 'Invalid controls.ini' -and $combined -match 'OpenXR preflight failed' -and $combined -match 'Virtual Desktop uses VDXR' -and $combined -match 'Steam Link uses SteamVR') 'failed preflights persist their actionable errors'
     Set-BlvrPreferences ([pscustomobject]@{telemetry=$true;performance_logging=$true})
     Check ($env:BLVR_TELEMETRY_PATH -eq (Join-Path $logs 'blvr_telemetry.jsonl') -and $env:BLVR_PERF_DIR -eq $logs) 'opt-in diagnostic files target a writable user logs folder'
     [IO.File]::WriteAllText((Join-Path $proof 'receipt.json'),(@{passed=$true;checks=$checks.ToArray();native_dependencies='private stub executables; owned real child lifetimes; no game launched'} | ConvertTo-Json -Depth 4))
